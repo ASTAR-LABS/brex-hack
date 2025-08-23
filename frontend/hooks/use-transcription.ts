@@ -90,7 +90,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   // Listen to WebSocket messages
   useEffect(() => {
     const unsubscribe = websocketManager.addMessageListener((message: WebSocketMessage) => {
-      if (message.type === 'session_started' && message.session_id) {
+      if ((message.type === 'session_started' || message.type === 'session_resumed') && message.session_id) {
         options.onSessionStart?.(message.session_id);
       } else if (message.type === 'transcription' && message.is_final && message.text) {
         options.onTranscription?.(message.text);
@@ -205,6 +205,11 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     // Send stop command to backend
     if (websocketManager.isConnected()) {
       websocketManager.sendCommand('stop_recording');
+      // Disconnect WebSocket after sending stop command
+      // The session will be paused on the backend
+      setTimeout(() => {
+        disconnectMutation.mutate();
+      }, 100);
     }
     
     // Stop recording stream
@@ -237,7 +242,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     
     setWaveformData(new Array(40).fill(0));
     setIsRecording(false);
-  }, []);
+  }, [disconnectMutation]);
 
   // Clean up on unmount
   useEffect(() => {

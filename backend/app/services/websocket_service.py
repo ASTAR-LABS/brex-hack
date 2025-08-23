@@ -30,13 +30,43 @@ class WebSocketService:
             "origin": websocket.headers.get("origin", ""),
         }
         
-        session = self.session_manager.create_session(websocket, metadata)
-        audio_processor = AudioProcessor()
+        # Wait for initial message with optional session_id
+        session = None
+        is_resumed = False
+        try:
+            first_message = await asyncio.wait_for(websocket.receive(), timeout=5.0)
+            if "text" in first_message:
+                data = json.loads(first_message["text"])
+                if data.get("type") == "init":
+                    session_id = data.get("session_id")
+                    session, is_resumed = self.session_manager.create_or_resume_session(
+                        websocket, session_id, metadata
+                    )
+        except asyncio.TimeoutError:
+            # No init message received, create new session
+            session = self.session_manager.create_session(websocket, metadata)
+        except Exception as e:
+            logger.warning(f"Error processing init message: {e}")
+            session = self.session_manager.create_session(websocket, metadata)
+        
+        if not session:
+            session = self.session_manager.create_session(websocket, metadata)
+        
+        from app.core.config import settings
+        audio_processor = AudioProcessor(
+            sample_rate=settings.audio_sample_rate,
+            chunk_duration_ms=settings.audio_chunk_duration_ms,
+            buffer_duration_ms=settings.audio_buffer_duration_ms,
+            vad_aggressiveness=settings.vad_aggressiveness,
+            vad_enabled=settings.vad_enabled
+        )
         
         await websocket.send_json({
-            "type": "session_started",
+            "type": "session_started" if not is_resumed else "session_resumed",
             "session_id": session.session_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "is_resumed": is_resumed,
+            "transcript": session.full_transcript if is_resumed else []
         })
         
         try:
@@ -105,7 +135,8 @@ class WebSocketService:
             if transcript:
                 logger.info(f"Session {session.session_id} transcript: {transcript}")
             
-            self.session_manager.remove_session(session.session_id)
+            # Pause session instead of removing it (will be auto-cleaned after persistence timeout)
+            self.session_manager.pause_session(session.session_id)
             
             try:
                 await websocket.close()
@@ -116,14 +147,16 @@ class WebSocketService:
         command = data.get("command")
         
         if command == "stop_recording":
-            logger.info(f"Stopping recording for session {session.session_id}")
+            logger.info(f"Pausing session {session.session_id}")
             await session.websocket.send_json({
-                "type": "session_ended",
+                "type": "session_paused",
                 "session_id": session.session_id,
                 "timestamp": datetime.now().isoformat(),
-                "final_transcript": session.get_full_text()
+                "final_transcript": session.get_full_text(),
+                "can_resume": True,
+                "resume_timeout_minutes": 10
             })
-            return True  # Signal to end the session
+            return True  # Signal to pause the session
         
         elif command == "get_transcript":
             await session.websocket.send_json({

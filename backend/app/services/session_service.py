@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import asyncio
 import logging
 
@@ -12,11 +12,13 @@ class Session:
         self.websocket = websocket
         self.connected_at = datetime.now()
         self.last_activity = datetime.now()
+        self.paused_at: Optional[datetime] = None
         self.full_transcript: List[str] = []
         self.current_buffer = ""
         self.audio_buffer = bytearray()
         self.metadata: Dict[str, Any] = {}
         self.is_active = True
+        self.is_paused = False
         
     def update_activity(self):
         self.last_activity = datetime.now()
@@ -31,15 +33,28 @@ class Session:
     def get_full_text(self) -> str:
         return " ".join(self.full_transcript) + (" " + self.current_buffer if self.current_buffer else "")
     
+    def pause(self):
+        self.is_paused = True
+        self.paused_at = datetime.now()
+        self.websocket = None  # Clear websocket reference when paused
+        
+    def resume(self, websocket: Any):
+        self.is_paused = False
+        self.paused_at = None
+        self.websocket = websocket
+        self.update_activity()
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "session_id": self.session_id,
             "connected_at": self.connected_at.isoformat(),
             "last_activity": self.last_activity.isoformat(),
+            "paused_at": self.paused_at.isoformat() if self.paused_at else None,
             "full_transcript": self.full_transcript,
             "current_buffer": self.current_buffer,
             "metadata": self.metadata,
-            "is_active": self.is_active
+            "is_active": self.is_active,
+            "is_paused": self.is_paused
         }
 
 class SessionManager:
@@ -60,13 +75,30 @@ class SessionManager:
             except asyncio.CancelledError:
                 pass
     
-    def create_session(self, websocket: Any, metadata: Optional[Dict[str, Any]] = None) -> Session:
-        session_id = str(uuid.uuid4())
-        session = Session(session_id, websocket)
+    def create_or_resume_session(self, websocket: Any, session_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Tuple[Session, bool]:
+        """
+        Create a new session or resume an existing one.
+        Returns (session, is_resumed) tuple
+        """
+        # Try to resume existing session
+        if session_id and session_id in self.sessions:
+            session = self.sessions[session_id]
+            if session.is_paused:
+                session.resume(websocket)
+                logger.info(f"Resumed session: {session_id}")
+                return session, True
+        
+        # Create new session
+        new_session_id = session_id if session_id else str(uuid.uuid4())
+        session = Session(new_session_id, websocket)
         if metadata:
             session.metadata = metadata
-        self.sessions[session_id] = session
-        logger.info(f"Created new session: {session_id}")
+        self.sessions[new_session_id] = session
+        logger.info(f"Created new session: {new_session_id}")
+        return session, False
+    
+    def create_session(self, websocket: Any, metadata: Optional[Dict[str, Any]] = None) -> Session:
+        session, _ = self.create_or_resume_session(websocket, None, metadata)
         return session
     
     def get_session(self, session_id: str) -> Optional[Session]:
@@ -81,6 +113,15 @@ class SessionManager:
                 session.update_activity()
                 return session
         return None
+    
+    def pause_session(self, session_id: str) -> bool:
+        """Pause a session instead of removing it"""
+        if session_id in self.sessions:
+            session = self.sessions[session_id]
+            session.pause()
+            logger.info(f"Paused session: {session_id}")
+            return True
+        return False
     
     def remove_session(self, session_id: str) -> bool:
         if session_id in self.sessions:
@@ -98,6 +139,9 @@ class SessionManager:
         return False
     
     async def _cleanup_inactive_sessions(self):
+        from app.core.config import settings
+        session_persistence_delta = timedelta(minutes=settings.session_persistence_minutes)
+        
         while True:
             try:
                 await asyncio.sleep(60)
@@ -105,8 +149,14 @@ class SessionManager:
                 inactive_sessions = []
                 
                 for session_id, session in self.sessions.items():
-                    if now - session.last_activity > self.session_timeout:
-                        inactive_sessions.append(session_id)
+                    # Clean up paused sessions after persistence timeout
+                    if session.is_paused and session.paused_at:
+                        if now - session.paused_at > session_persistence_delta:
+                            inactive_sessions.append(session_id)
+                    # Clean up active sessions after activity timeout
+                    elif not session.is_paused:
+                        if now - session.last_activity > self.session_timeout:
+                            inactive_sessions.append(session_id)
                 
                 for session_id in inactive_sessions:
                     session = self.sessions.get(session_id)

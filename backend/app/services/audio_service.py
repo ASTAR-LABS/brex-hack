@@ -12,8 +12,9 @@ class AudioProcessor:
         self,
         sample_rate: int = 16000,
         chunk_duration_ms: int = 30,
-        buffer_duration_ms: int = 1500,
-        vad_aggressiveness: int = 2
+        buffer_duration_ms: int = 500,
+        vad_aggressiveness: int = 2,
+        vad_enabled: bool = False
     ):
         self.sample_rate = sample_rate
         self.chunk_duration_ms = chunk_duration_ms
@@ -25,13 +26,18 @@ class AudioProcessor:
         self.audio_buffer = bytearray()
         self.processing_buffer = deque(maxlen=int(buffer_duration_ms / chunk_duration_ms))
         
-        try:
-            self.vad = webrtcvad.Vad(vad_aggressiveness)
-            self.vad_enabled = True
-        except:
-            logger.warning("WebRTC VAD not available, continuing without VAD")
+        self.vad_enabled = vad_enabled
+        
+        if self.vad_enabled:
+            try:
+                self.vad = webrtcvad.Vad(vad_aggressiveness)
+            except:
+                logger.warning("WebRTC VAD not available, continuing without VAD")
+                self.vad = None
+                self.vad_enabled = False
+        else:
             self.vad = None
-            self.vad_enabled = False
+            logger.info("VAD disabled by configuration")
         
         self.speech_frames = 0
         self.silence_frames = 0
