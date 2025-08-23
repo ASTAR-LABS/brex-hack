@@ -154,18 +154,22 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       }
 
       // Set up audio context with 16kHz sample rate for recording
+      // Note: Whisper expects 16kHz. If browser doesn't support it, we use default
+      // and the backend will handle resampling if needed
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       try {
         audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
       } catch (e) {
-        // Fallback if 16kHz is not supported
-        console.warn('16kHz sample rate not supported, using default:', e);
+        // Fallback if 16kHz is not supported (typically 48kHz on most browsers)
+        // Backend's AudioProcessor can resample if needed via resample_if_needed()
+        console.warn('16kHz sample rate not supported, using browser default. Backend will handle resampling.');
         audioContextRef.current = new AudioContextClass();
       }
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
       
       // Try to use AudioWorklet if available (better performance)
+      let audioWorkletInitialized = false;
       if ('audioWorklet' in audioContextRef.current) {
         try {
           await audioContextRef.current.audioWorklet.addModule('/audio-processor.worklet.js');
@@ -178,15 +182,15 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
           };
           
           source.connect(workletNode);
+          audioWorkletInitialized = true;
           console.log('Using AudioWorklet for audio processing');
         } catch (e) {
           console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
-          // Fall through to ScriptProcessor
         }
       }
       
       // Fallback to ScriptProcessor if AudioWorklet not available or failed
-      if (!('audioWorklet' in audioContextRef.current) || !source.numberOfOutputs) {
+      if (!audioWorkletInitialized) {
         processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
 
         processorRef.current.onaudioprocess = (e) => {

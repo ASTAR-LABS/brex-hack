@@ -1,6 +1,7 @@
 from pywhispercpp.model import Model
 import asyncio
 from typing import Tuple, Optional, List
+from collections import deque
 import tempfile
 import wave
 import os
@@ -13,7 +14,7 @@ class WhisperClient:
         self.model = Model(model_size, n_threads=n_threads)
         self.previous_text = ""
         self.overlap_duration = 0.5
-        self.context_buffer = []  # Keep last few segments for context
+        self.context_buffer = deque(maxlen=5)  # Efficient O(1) operations with automatic size limit
     
     async def transcribe(self, audio_path: str, language: str = "en") -> str:
         segments = await asyncio.to_thread(
@@ -41,7 +42,8 @@ class WhisperClient:
                     wav_file.writeframes(audio_data)
                 
                 # Use context from previous segments for better accuracy
-                initial_prompt = " ".join(self.context_buffer[-3:]) if self.context_buffer else ""
+                # Convert last 3 items from deque to list for joining
+                initial_prompt = " ".join(list(self.context_buffer)[-3:]) if self.context_buffer else ""
                 
                 segments = await asyncio.to_thread(
                     self.model.transcribe,
@@ -63,11 +65,8 @@ class WhisperClient:
                 
                 if is_final and full_text != self.previous_text:
                     self.previous_text = full_text
-                    # Add to context buffer for next transcription
+                    # Add to context buffer (deque automatically maintains size limit)
                     self.context_buffer.append(full_text)
-                    # Keep only last 5 segments for context
-                    if len(self.context_buffer) > 5:
-                        self.context_buffer.pop(0)
                     return full_text, True
                 else:
                     return full_text, False
