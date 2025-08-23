@@ -19,6 +19,7 @@ class Session:
         self.metadata: Dict[str, Any] = {}
         self.is_active = True
         self.is_paused = False
+        self.word_history: List[str] = []  # Store session-specific word history for Whisper context
         
     def update_activity(self):
         self.last_activity = datetime.now()

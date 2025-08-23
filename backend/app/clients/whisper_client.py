@@ -1,7 +1,6 @@
 from pywhispercpp.model import Model
 import asyncio
 from typing import Tuple, Optional, List
-from collections import deque
 import tempfile
 import wave
 import os
@@ -9,89 +8,120 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class WhisperClient:
     def __init__(self, model_size: str = "base", n_threads: int = 6):
         self.model = Model(model_size, n_threads=n_threads)
-        self.previous_text = ""
-        self.overlap_duration = 0.5
-        self.context_buffer = deque(maxlen=5)  # Efficient O(1) operations with automatic size limit
-    
+        # Removed instance-level state to make WhisperClient stateless and thread-safe
+
     async def transcribe(self, audio_path: str, language: str = "en") -> str:
         segments = await asyncio.to_thread(
-            self.model.transcribe, 
-            audio_path,
-            language=language,
-            print_realtime=False
+            self.model.transcribe, audio_path, language=language, print_realtime=False
         )
         text = " ".join([segment.text for segment in segments])
         return text
-    
+
     async def transcribe_stream(
-        self, 
-        audio_data: bytes, 
+        self,
+        audio_data: bytes,
         sample_rate: int = 16000,
         language: str = "en",
-        return_timestamps: bool = False
-    ) -> Tuple[str, bool]:
+        context_words: Optional[List[str]] = None,
+        return_timestamps: bool = False,
+    ) -> Tuple[str, bool, List[str]]:
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                with wave.open(tmp_file.name, 'wb') as wav_file:
+                with wave.open(tmp_file.name, "wb") as wav_file:
                     wav_file.setnchannels(1)
                     wav_file.setsampwidth(2)
                     wav_file.setframerate(sample_rate)
                     wav_file.writeframes(audio_data)
-                
-                # Use context from previous segments for better accuracy
-                # Convert last 3 items from deque to list for joining
-                initial_prompt = " ".join(list(self.context_buffer)[-3:]) if self.context_buffer else ""
-                
+
+                # Use provided context words (last 100 words max to stay under 224 token limit)
+                # Initialize context if not provided
+                if context_words is None:
+                    context_words = []
+
+                # Take last 100 words to ensure we stay under 224 token limit
+                context_words = (
+                    context_words[-100:] if len(context_words) > 100 else context_words
+                )
+                initial_prompt = " ".join(context_words) if context_words else ""
+
                 segments = await asyncio.to_thread(
                     self.model.transcribe,
                     tmp_file.name,
                     language=language,
                     print_realtime=False,
                     single_segment=True,  # Useful for streaming
-                    initial_prompt=initial_prompt  # Provide context
+                    initial_prompt=initial_prompt,  # Provide context
+                    # Working parameters for pywhispercpp
+                    temperature=0.0,  # Deterministic output
+                    no_speech_thold=0.6,  # Filter silence
+                    entropy_thold=2.4,  # Similar to compression_ratio_threshold
+                    suppress_blank=True,  # Suppress blank outputs
                 )
-                
+
                 os.unlink(tmp_file.name)
-                
+
                 if not segments:
-                    return "", False
-                
+                    return "", False, context_words
+
+                # Quality filtering
+                for segment in segments:
+                    # Check if transcription quality metrics are available
+                    if (
+                        hasattr(segment, "no_speech_prob")
+                        and segment.no_speech_prob > 0.6
+                    ):
+                        logger.debug("High no_speech probability, skipping")
+                        return "", False, context_words
+
+                    # Log compression ratio for debugging
+                    if hasattr(segment, "compression_ratio"):
+                        logger.debug(f"Compression ratio: {segment.compression_ratio}")
+                        if segment.compression_ratio > 2.4:
+                            logger.warning(
+                                "Likely gibberish (high compression ratio), rejecting"
+                            )
+                            return "", False, context_words
+
                 full_text = " ".join([segment.text.strip() for segment in segments])
-                
+
                 is_final = self._is_sentence_complete(full_text)
-                
-                if is_final and full_text != self.previous_text:
-                    self.previous_text = full_text
-                    # Add to context buffer (deque automatically maintains size limit)
-                    self.context_buffer.append(full_text)
-                    return full_text, True
-                else:
-                    return full_text, False
-                    
+
+                # Update context with new words if we have final text
+                updated_context = list(context_words)  # Create a copy
+                if is_final and full_text.strip():
+                    new_words = full_text.split()
+                    updated_context.extend(new_words)
+                    # Keep only last 100 words
+                    updated_context = updated_context[-100:]
+
+                return full_text, is_final, updated_context
+
         except Exception as e:
             logger.error(f"Error in stream transcription: {e}")
-            return "", False
-    
+            return "", False, context_words if context_words else []
+
     def _is_sentence_complete(self, text: str) -> bool:
         if not text:
             return False
-        
+
         text = text.strip()
-        
-        sentence_endings = ['.', '!', '?', '。', '！', '？']
-        
+
+        # Don't mark very short text as complete
+        if len(text) < 20:  # Characters, not words
+            return False
+
+        # Trust Whisper's punctuation for sentence endings
+        sentence_endings = [".", "!", "?", "。", "！", "？"]
         if any(text.endswith(ending) for ending in sentence_endings):
             return True
-        
-        pause_indicators = [',', ';', ':', '、', '；', '：']
+
+        # Only force completion for very long text without punctuation
         words = text.split()
-        if len(words) > 10 and any(char in text for char in pause_indicators):
+        if len(words) > 25:  # Much higher threshold
             return True
-        
-        if len(words) > 15:
-            return True
-        
+
         return False

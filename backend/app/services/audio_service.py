@@ -42,7 +42,7 @@ class AudioProcessor:
         self.speech_frames = 0
         self.silence_frames = 0
         self.is_speech_active = False
-        self.speech_threshold = 0.7
+        self.speech_threshold = 0.3  # Lowered from 0.5 to detect softer speech
         self.silence_threshold = 0.9
         
     def add_audio_chunk(self, audio_data: bytes) -> Optional[bytes]:
@@ -83,12 +83,12 @@ class AudioProcessor:
         if speech_ratio > self.speech_threshold:
             self.speech_frames += 1
             self.silence_frames = 0
-            if self.speech_frames >= 3:
+            if self.speech_frames >= 2:  # Faster speech detection
                 self.is_speech_active = True
         else:
             self.silence_frames += 1
             self.speech_frames = 0
-            if self.silence_frames >= 10:
+            if self.silence_frames >= 30:  # Much more conservative - ~900ms of silence
                 self.is_speech_active = False
         
         return self.is_speech_active
