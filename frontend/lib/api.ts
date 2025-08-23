@@ -73,6 +73,22 @@ export async function executeAction(actionId: string): Promise<ActionStatus> {
   return response.json();
 }
 
+export async function getSessionActions(): Promise<{ actions: ActionStatus[] }> {
+  const sessionToken = getSessionToken();
+  const response = await fetch(`${API_BASE_URL}/api/v1/actions/session`, {
+    method: 'GET',
+    headers: {
+      ...(sessionToken && { 'X-Session-Token': sessionToken }),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to get session actions');
+  }
+
+  return response.json();
+}
+
 export async function getActionStatus(actionId: string): Promise<ActionStatus> {
   const response = await fetch(`${API_BASE_URL}/api/v1/actions/status/${actionId}`, {
     method: 'GET',

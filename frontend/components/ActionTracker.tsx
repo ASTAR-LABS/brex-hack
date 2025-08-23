@@ -1,72 +1,55 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { extractActions, getActionStatus, type Action, type ActionStatus } from "@/lib/api";
+import { extractActions, getSessionActions, getSessionToken, type ActionStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle, XCircle, Clock } from "lucide-react";
 
 export function ActionTracker() {
   const [text, setText] = useState("");
-  const [actions, setActions] = useState<Action[]>([]);
-  const [actionStatuses, setActionStatuses] = useState<Record<string, ActionStatus>>({});
+  const [actions, setActions] = useState<ActionStatus[]>([]);
   const [loading, setLoading] = useState(false);
-  const [pollingIds, setPollingIds] = useState<Set<string>>(new Set());
+  const [isPolling, setIsPolling] = useState(false);
 
-  // Poll for action status
+  // Poll for all session actions
   useEffect(() => {
-    if (pollingIds.size === 0) return;
+    const sessionToken = getSessionToken();
+    if (!sessionToken) return;
 
+    // Load initial actions
+    loadSessionActions();
+    setIsPolling(true);
+
+    // Poll for updates
     const interval = setInterval(async () => {
-      const newStatuses = { ...actionStatuses };
-      const newPollingIds = new Set(pollingIds);
-
-      for (const actionId of pollingIds) {
-        try {
-          const status = await getActionStatus(actionId);
-          newStatuses[actionId] = status;
-
-          // Stop polling if action is resolved or failed
-          if (status.state === 'resolved' || status.state === 'failed') {
-            newPollingIds.delete(actionId);
-          }
-        } catch (err) {
-          console.error(`Failed to get status for ${actionId}:`, err);
-        }
-      }
-
-      setActionStatuses(newStatuses);
-      setPollingIds(newPollingIds);
+      await loadSessionActions();
     }, 2000); // Poll every 2 seconds
 
-    return () => clearInterval(interval);
-  }, [pollingIds, actionStatuses]);
+    return () => {
+      clearInterval(interval);
+      setIsPolling(false);
+    };
+  }, []);
+
+  const loadSessionActions = async () => {
+    try {
+      const result = await getSessionActions();
+      setActions(result.actions);
+    } catch (err) {
+      console.error('Failed to load session actions:', err);
+    }
+  };
 
   const handleExtract = async () => {
     if (!text.trim()) return;
 
     setLoading(true);
     try {
-      const result = await extractActions(text);
-      setActions(result.actions);
+      await extractActions(text);
+      setText(""); // Clear input after successful extraction
       
-      // Initialize statuses and start polling for all actions
-      const newStatuses: Record<string, ActionStatus> = {};
-      const newPollingIds = new Set<string>();
-      
-      for (const action of result.actions) {
-        newStatuses[action.id] = {
-          id: action.id,
-          type: action.type,
-          description: action.description,
-          state: action.confidence > 0.8 ? 'queued' : 'extracted'
-        };
-        
-        // Poll all actions to track their status
-        newPollingIds.add(action.id);
-      }
-      
-      setActionStatuses(newStatuses);
-      setPollingIds(newPollingIds);
+      // Actions will appear automatically via polling
+      await loadSessionActions();
     } catch (err) {
       console.error('Failed to extract actions:', err);
     } finally {
@@ -133,9 +116,10 @@ export function ActionTracker() {
       {/* Actions List */}
       {actions.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-lg font-medium text-white mb-3">Extracted Actions</h3>
+          <h3 className="text-lg font-medium text-white mb-3">
+            Session Actions {isPolling && <span className="text-xs text-gray-400 ml-2">(Live)</span>}
+          </h3>
           {actions.map((action) => {
-            const status = actionStatuses[action.id];
             const willAutoExecute = action.confidence > 0.8;
             
             return (
@@ -149,32 +133,32 @@ export function ActionTracker() {
                       <span className="text-sm font-medium text-gray-300">
                         {action.type}
                       </span>
-                      <span className="text-xs text-gray-500">
-                        ({(action.confidence * 100).toFixed(0)}% confidence)
-                      </span>
-                      {status && (
-                        <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${getStateColor(status.state)}`}>
-                          {getStateIcon(status.state)}
-                          <span>{status.state}</span>
-                        </div>
+                      {action.confidence > 0 && (
+                        <span className="text-xs text-gray-500">
+                          ({(action.confidence * 100).toFixed(0)}% confidence)
+                        </span>
                       )}
-                      {willAutoExecute && status?.state === 'extracted' && (
+                      <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${getStateColor(action.state)}`}>
+                        {getStateIcon(action.state)}
+                        <span>{action.state}</span>
+                      </div>
+                      {willAutoExecute && action.state === 'queued' && (
                         <span className="text-xs text-blue-400">• Auto-executing</span>
                       )}
                     </div>
                     <p className="text-white">{action.description}</p>
                     
                     {/* Show result or error */}
-                    {status?.state === 'resolved' && status.result && (
+                    {action.state === 'resolved' && action.result && (
                       <div className="mt-3">
-                        {status.result.html_url ? (
+                        {action.result.html_url ? (
                           <Button
                             asChild
                             size="sm"
                             className="bg-green-600 hover:bg-green-700 text-white"
                           >
                             <a 
-                              href={status.result.html_url} 
+                              href={action.result.html_url} 
                               target="_blank" 
                               rel="noopener noreferrer"
                             >
@@ -189,13 +173,13 @@ export function ActionTracker() {
                       </div>
                     )}
                     
-                    {status?.state === 'failed' && status.error && (
+                    {action.state === 'failed' && action.error && (
                       <div className="mt-2 p-2 bg-red-500/10 rounded text-sm text-red-400">
-                        {status.error}
+                        {action.error}
                       </div>
                     )}
                     
-                    {!willAutoExecute && status?.state === 'extracted' && (
+                    {!willAutoExecute && action.state === 'extracted' && (
                       <div className="mt-2 text-xs text-gray-500">
                         Low confidence - requires manual execution
                       </div>

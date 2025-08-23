@@ -256,6 +256,47 @@ async def execute_action(
         logger.error(f"Execution error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/session")
+async def get_session_actions(
+    session_token: Optional[str] = Header(None, alias="X-Session-Token"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all actions for the current session.
+    """
+    try:
+        if not session_token:
+            return {"actions": []}
+        
+        result = await db.execute(
+            select(ActionRecord)
+            .where(ActionRecord.session_token == session_token)
+            .order_by(ActionRecord.created_at.desc())
+        )
+        actions = result.scalars().all()
+        
+        return {
+            "actions": [
+                {
+                    "id": action.id,
+                    "state": action.state,
+                    "type": action.type,
+                    "description": action.description,
+                    "confidence": float(action.confidence) if action.confidence else 0,
+                    "error": action.error,
+                    "result": action.result,
+                    "created_at": action.created_at,
+                    "executed_at": action.executed_at,
+                    "resolved_at": action.resolved_at
+                }
+                for action in actions
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Session actions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/status/{action_id}")
 async def get_action_status(
     action_id: str,
