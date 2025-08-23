@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 class WebSocketService:
     def __init__(self):
+        from app.core.config import settings
         self.session_manager = SessionManager()
-        self.whisper_client = WhisperClient()
+        self.whisper_client = WhisperClient(model_size=settings.whisper_model_size)
         self.action_service = ActionExtractionService()
     async def start(self):
         await self.session_manager.start()
@@ -108,7 +109,7 @@ class WebSocketService:
                                 context_words=session.word_history,
                             )
                         )
-                        print(session.word_history)
+                        
                         # Update session's context with the new words
                         if is_final and updated_context:
                             session.word_history = updated_context

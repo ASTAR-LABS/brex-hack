@@ -26,16 +26,16 @@ class Settings(BaseSettings):
     )
 
     # Whisper Settings
-    whisper_model_size: str = "base"
+    whisper_model_size: str = "small"  # Upgraded from "base" for better accuracy
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
 
     # Audio Processing Settings
     audio_sample_rate: int = 16000
     audio_chunk_duration_ms: int = 30
-    audio_buffer_duration_ms: int = 1500  # Reduced from 1500ms for faster response
-    vad_aggressiveness: int = 2
-    vad_enabled: bool = False  # Disable VAD for immediate processing
+    audio_buffer_duration_ms: int = 3500  # Increased from 1500ms for better context
+    vad_aggressiveness: int = 1  # Reduced from 2 - less aggressive filtering
+    vad_enabled: bool = True  # Enable VAD to filter out non-speech audio
 
     # Session Settings
     session_timeout_minutes: int = 30

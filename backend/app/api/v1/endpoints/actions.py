@@ -7,6 +7,8 @@ from app.core.database import get_db, IntegrationCredentials, ActionRecord
 from app.models.action_state import ActionState
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from datetime import datetime
+import asyncio
 import uuid
 import logging
 
@@ -29,6 +31,68 @@ class ExtractActionsResponse(BaseModel):
 
 action_service = ActionExtractionService()
 executor_service = ActionExecutorService()
+
+async def _execute_action_background(action_id: str, session_token: str, db: AsyncSession):
+    """Background task to execute an action"""
+    try:
+        # Get fresh database session
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db_session:
+            # Fetch action
+            result = await db_session.execute(
+                select(ActionRecord).where(ActionRecord.id == action_id)
+            )
+            action_record = result.scalar_one_or_none()
+            
+            if not action_record or action_record.state != ActionState.QUEUED:
+                return
+            
+            # Get integration config
+            integration_config = {}
+            if session_token and session_token != "anonymous":
+                creds_result = await db_session.execute(
+                    select(IntegrationCredentials).where(
+                        IntegrationCredentials.session_token == session_token
+                    )
+                )
+                creds = creds_result.scalar_one_or_none()
+                
+                if creds:
+                    integration_config = {
+                        "github_token": creds.github_token,
+                        "github_owner": creds.github_owner,
+                        "github_repo": creds.github_repo
+                    }
+            
+            # Update state to executing
+            action_record.state = ActionState.EXECUTING
+            action_record.executed_at = datetime.now()
+            await db_session.commit()
+            
+            # Execute the action
+            try:
+                result = await executor_service.execute_single_action(
+                    action_type=action_record.type,
+                    description=action_record.description,
+                    metadata=action_record.action_metadata,
+                    integration_config=integration_config
+                )
+                
+                # Update with success
+                action_record.state = ActionState.RESOLVED
+                action_record.resolved_at = datetime.now()
+                action_record.result = result
+                
+            except Exception as exec_error:
+                # Update with failure
+                action_record.state = ActionState.FAILED
+                action_record.error = str(exec_error)
+                logger.error(f"Action execution failed: {exec_error}")
+            
+            await db_session.commit()
+            
+    except Exception as e:
+        logger.error(f"Background execution error for action {action_id}: {e}")
 
 @router.post("/extract", response_model=ExtractActionsResponse)
 async def extract_actions(
@@ -65,13 +129,18 @@ async def extract_actions(
         
         for action in actions:
             action_id = str(uuid.uuid4())
+            confidence = action["confidence"]
+            
+            # Auto-execute high confidence actions
+            initial_state = ActionState.QUEUED if confidence > 0.8 else ActionState.EXTRACTED
+            
             action_record = ActionRecord(
                 id=action_id,
                 session_token=session_token or "anonymous",
                 type=action["type"],
                 description=action["description"],
-                confidence=str(action["confidence"]),
-                state=ActionState.EXTRACTED,
+                confidence=str(confidence),
+                state=initial_state,
                 action_metadata={}
             )
             db.add(action_record)
@@ -81,6 +150,13 @@ async def extract_actions(
             stored_actions.append(action)
         
         await db.commit()
+        
+        # Auto-execute high confidence actions in background
+        for action in stored_actions:
+            if action["confidence"] > 0.8:
+                # Execute in background without waiting
+                import asyncio
+                asyncio.create_task(_execute_action_background(action["id"], session_token, db))
         
         return ExtractActionsResponse(
             actions=stored_actions,
@@ -101,15 +177,33 @@ async def execute_action(
     Execute a specific action using stored integration credentials.
     """
     try:
-        integration_config = {}
+        # Fetch action from database
+        result = await db.execute(
+            select(ActionRecord).where(ActionRecord.id == action_id)
+        )
+        action_record = result.scalar_one_or_none()
         
+        if not action_record:
+            raise HTTPException(status_code=404, detail="Action not found")
+        
+        # Check if action is already executed
+        if action_record.state in [ActionState.EXECUTING, ActionState.RESOLVED]:
+            return {
+                "id": action_record.id,
+                "state": action_record.state,
+                "result": action_record.result,
+                "error": action_record.error
+            }
+        
+        # Get integration config
+        integration_config = {}
         if session_token:
-            result = await db.execute(
+            creds_result = await db.execute(
                 select(IntegrationCredentials).where(
                     IntegrationCredentials.session_token == session_token
                 )
             )
-            creds = result.scalar_one_or_none()
+            creds = creds_result.scalar_one_or_none()
             
             if creds:
                 integration_config = {
@@ -118,28 +212,89 @@ async def execute_action(
                     "github_repo": creds.github_repo
                 }
         
-        action = await executor_service.execute_action(action_id, integration_config)
-        
-        action_record = ActionRecord(
-            id=action.id,
-            session_token=session_token or "anonymous",
-            type=action.type,
-            description=action.description,
-            confidence=str(action.confidence),
-            state=action.state,
-            executed_at=action.executed_at,
-            resolved_at=action.resolved_at,
-            error=action.error,
-            result=action.result,
-            action_metadata=action.metadata
-        )
-        db.add(action_record)
+        # Update action state to executing
+        action_record.state = ActionState.EXECUTING
+        action_record.executed_at = datetime.now()
         await db.commit()
         
-        return action
+        # Execute the action
+        try:
+            result = await executor_service.execute_single_action(
+                action_type=action_record.type,
+                description=action_record.description,
+                metadata=action_record.action_metadata,
+                integration_config=integration_config
+            )
+            
+            # Update action with success
+            action_record.state = ActionState.RESOLVED
+            action_record.resolved_at = datetime.now()
+            action_record.result = result
+            
+        except Exception as exec_error:
+            # Update action with failure
+            action_record.state = ActionState.FAILED
+            action_record.error = str(exec_error)
+            logger.error(f"Action execution failed: {exec_error}")
         
+        await db.commit()
+        
+        return {
+            "id": action_record.id,
+            "state": action_record.state,
+            "type": action_record.type,
+            "description": action_record.description,
+            "result": action_record.result,
+            "error": action_record.error,
+            "executed_at": action_record.executed_at,
+            "resolved_at": action_record.resolved_at
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Execution error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/session")
+async def get_session_actions(
+    session_token: Optional[str] = Header(None, alias="X-Session-Token"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all actions for the current session.
+    """
+    try:
+        if not session_token:
+            return {"actions": []}
+        
+        result = await db.execute(
+            select(ActionRecord)
+            .where(ActionRecord.session_token == session_token)
+            .order_by(ActionRecord.created_at.desc())
+        )
+        actions = result.scalars().all()
+        
+        return {
+            "actions": [
+                {
+                    "id": action.id,
+                    "state": action.state,
+                    "type": action.type,
+                    "description": action.description,
+                    "confidence": float(action.confidence) if action.confidence else 0,
+                    "error": action.error,
+                    "result": action.result,
+                    "created_at": action.created_at,
+                    "executed_at": action.executed_at,
+                    "resolved_at": action.resolved_at
+                }
+                for action in actions
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Session actions error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/status/{action_id}")
