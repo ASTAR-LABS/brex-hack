@@ -3,6 +3,11 @@ from fastapi.websockets import WebSocketState
 from app.services.session_service import SessionManager
 from app.services.audio_service import AudioProcessor
 from app.clients.whisper_client import WhisperClient
+from app.services.action_extraction_service import ActionExtractionService
+from app.integrations.github_integration import GitHubIntegration
+from app.core.database import get_db, IntegrationCredentials
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import json
 import asyncio
 import logging
@@ -15,6 +20,7 @@ class WebSocketService:
     def __init__(self):
         self.session_manager = SessionManager()
         self.whisper_client = WhisperClient()
+        self.action_service = ActionExtractionService()
         
     async def start(self):
         await self.session_manager.start()
@@ -30,18 +36,22 @@ class WebSocketService:
             "origin": websocket.headers.get("origin", ""),
         }
         
-        # Wait for initial message with optional session_id
+        # Wait for initial message with optional session_id and session_token
         session = None
         is_resumed = False
+        session_token = None
         try:
             first_message = await asyncio.wait_for(websocket.receive(), timeout=5.0)
             if "text" in first_message:
                 data = json.loads(first_message["text"])
                 if data.get("type") == "init":
                     session_id = data.get("session_id")
+                    session_token = data.get("session_token")
                     session, is_resumed = self.session_manager.create_or_resume_session(
                         websocket, session_id, metadata
                     )
+                    if session_token:
+                        session.metadata["session_token"] = session_token
         except asyncio.TimeoutError:
             # No init message received, create new session
             session = self.session_manager.create_session(websocket, metadata)
@@ -113,6 +123,9 @@ class WebSocketService:
                                     "total_sentences": len(session.full_transcript),
                                     "timestamp": datetime.now().isoformat()
                                 })
+                                
+                                # Extract and execute actions from the final text
+                                await self._extract_and_execute_actions(text, session, websocket)
                     
                     session.update_activity()
                     
@@ -181,3 +194,143 @@ class WebSocketService:
             })
         
         return False  # Don't stop the session for other commands
+    
+    async def _extract_and_execute_actions(self, text: str, session, websocket: WebSocket):
+        """Extract actions from text and execute high-confidence GitHub actions"""
+        try:
+            # Extract actions from the text
+            result = await self.action_service.extract_actions(text)
+            
+            if "error" in result:
+                logger.error(f"Action extraction error: {result['error']}")
+                return
+            
+            actions = result.get("actions", [])
+            
+            # Notify about extracted actions
+            if actions:
+                await websocket.send_json({
+                    "type": "actions_extracted",
+                    "actions": actions,
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            # Execute high-confidence GitHub actions
+            for action in actions:
+                if action["type"] == "github_action" and action["confidence"] > 0.8:
+                    await self._execute_github_action(action, session, websocket)
+                    
+        except Exception as e:
+            logger.error(f"Error extracting/executing actions: {e}")
+    
+    async def _execute_github_action(self, action: dict, session, websocket: WebSocket):
+        """Execute a GitHub action using stored credentials"""
+        try:
+            session_token = session.metadata.get("session_token")
+            
+            if not session_token:
+                await websocket.send_json({
+                    "type": "action_error",
+                    "message": "No GitHub credentials configured. Please connect GitHub in settings.",
+                    "timestamp": datetime.now().isoformat()
+                })
+                return
+            
+            # Get credentials from database
+            from app.core.database import async_session_factory
+            async with async_session_factory() as db:
+                result = await db.execute(
+                    select(IntegrationCredentials).where(
+                        IntegrationCredentials.session_token == session_token
+                    )
+                )
+                creds = result.scalar_one_or_none()
+                
+                if not creds or not creds.github_token:
+                    await websocket.send_json({
+                        "type": "action_error",
+                        "message": "GitHub credentials not found. Please reconnect GitHub.",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    return
+                
+                # Initialize GitHub integration
+                github = GitHubIntegration(
+                    token=creds.github_token,
+                    owner=creds.github_owner,
+                    repo=creds.github_repo
+                )
+                
+                # Parse the action description to determine what to do
+                description = action["description"].lower()
+                
+                if "issue" in description:
+                    # Extract title from description
+                    title = action["description"]
+                    if "create" in description:
+                        title = title.replace("create", "").replace("issue", "").strip()
+                        title = title.replace("a ", "").replace("an ", "").strip()
+                        title = title.replace("about", "-").replace("for", "-").strip()
+                        title = title.strip("- ").capitalize()
+                    
+                    if not title:
+                        title = "New Issue"
+                    
+                    # Create the issue
+                    result = await github.create_issue(
+                        title=title,
+                        body=f"Created via voice command: {action['description']}\n\n---\n*Generated by Ultrathink*"
+                    )
+                    
+                    if "error" not in result:
+                        await websocket.send_json({
+                            "type": "action_executed",
+                            "action": "github_issue_created",
+                            "result": {
+                                "issue_number": result.get("number"),
+                                "issue_url": result.get("html_url"),
+                                "title": result.get("title")
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        logger.info(f"Created GitHub issue #{result.get('number')}: {result.get('title')}")
+                    else:
+                        await websocket.send_json({
+                            "type": "action_error",
+                            "message": f"Failed to create issue: {result['error']}",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                
+                elif "pr" in description or "pull request" in description:
+                    # Handle PR comments
+                    pr_number = 1  # Default PR number, could extract from description
+                    
+                    result = await github.create_pr_comment(
+                        pr_number=pr_number,
+                        body=action["description"]
+                    )
+                    
+                    if "error" not in result:
+                        await websocket.send_json({
+                            "type": "action_executed",
+                            "action": "github_pr_comment_created",
+                            "result": {
+                                "pr_number": pr_number,
+                                "comment_url": result.get("html_url")
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    else:
+                        await websocket.send_json({
+                            "type": "action_error",
+                            "message": f"Failed to create PR comment: {result['error']}",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                
+        except Exception as e:
+            logger.error(f"Error executing GitHub action: {e}")
+            await websocket.send_json({
+                "type": "action_error",
+                "message": f"Failed to execute action: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            })
