@@ -7,6 +7,7 @@ import { RecordingTitle } from "@/components/recording-title";
 import { WaveformVisualizer } from "@/components/waveform-visualizer";
 import { RecordButton } from "@/components/record-button";
 import { TranscriptionDisplay } from "@/components/transcription-display";
+import { IntegrationsModal } from "@/components/IntegrationsModal";
 
 export default function Home() {
   const {
@@ -41,6 +42,9 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
+      {/* Integrations Modal */}
+      <IntegrationsModal />
+      
       {/* Connection Status */}
       <ConnectionStatus status={connectionStatus} />
 
