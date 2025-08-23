@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Settings, Github, Calendar, Database, FileText, Check, Loader2, AlertCircle, Slack, HardDrive, Cloud, ListTodo, Bug, Puzzle } from "lucide-react";
+import { Settings, Github, Calendar, MessageSquare, Calculator, Check, Loader2, AlertCircle, ExternalLink, LogOut } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -10,136 +10,125 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { connectGitHub, getSessionToken, setSessionToken } from "@/lib/api";
-import { getMCPStatus, testMCPConnection, type MCPStatus } from "@/lib/mcp";
+import { 
+  getAgentTools, 
+  getGoogleAuthStatus, 
+  getGoogleAuthUrl, 
+  disconnectGoogleCalendar,
+  sendAgentMessage,
+  type ToolsResponse,
+  type GoogleAuthStatus 
+} from "@/lib/agent";
 
-type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
-
-// Icon mapping for MCP servers
+// Icon mapping for tool categories
 const iconMap: Record<string, any> = {
   github: Github,
-  google_calendar: Calendar,
-  slack: Slack,
-  filesystem: FileText,
-  postgres: Database,
-  notion: FileText,
-  google_drive: Cloud,
-  linear: ListTodo,
-  jira: Bug,
-  custom_api: Puzzle,
+  calendar: Calendar,
+  slack: MessageSquare,
+  utility: Calculator,
+};
+
+// Category color mapping
+const categoryColors: Record<string, { bg: string; text: string; border: string }> = {
+  github: { bg: "bg-purple-500/10", text: "text-purple-400", border: "border-purple-500/20" },
+  calendar: { bg: "bg-blue-500/10", text: "text-blue-400", border: "border-blue-500/20" },
+  slack: { bg: "bg-green-500/10", text: "text-green-400", border: "border-green-500/20" },
+  utility: { bg: "bg-orange-500/10", text: "text-orange-400", border: "border-orange-500/20" },
 };
 
 export function IntegrationsModal() {
   const [open, setOpen] = useState(false);
-  const [mcpStatus, setMCPStatus] = useState<MCPStatus | null>(null);
+  const [tools, setTools] = useState<ToolsResponse | null>(null);
+  const [googleAuth, setGoogleAuth] = useState<GoogleAuthStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [testingMCP, setTestingMCP] = useState<string | null>(null);
-  
-  // Legacy GitHub form state (for backward compatibility)
-  const [connectionStates, setConnectionStates] = useState<Record<string, ConnectionState>>({});
-  const [showGitHubForm, setShowGitHubForm] = useState(false);
-  const [githubToken, setGithubToken] = useState("");
-  const [githubRepo, setGithubRepo] = useState("");
-  const [error, setError] = useState("");
+  const [testingTool, setTestingTool] = useState<string | null>(null);
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  // Fetch MCP status on mount and when dialog opens
+  // Fetch tools and auth status when dialog opens
   useEffect(() => {
     if (open) {
-      fetchMCPStatus();
-    }
-    
-    // Check for existing session (legacy)
-    const sessionToken = getSessionToken();
-    const repo = localStorage.getItem('github_repo');
-    
-    if (sessionToken && repo) {
-      setConnectionStates(prev => ({ ...prev, github: "connected" }));
-      setGithubRepo(repo);
+      fetchToolsAndStatus();
     }
   }, [open]);
 
-  const fetchMCPStatus = async () => {
+  const fetchToolsAndStatus = async () => {
     try {
       setLoading(true);
-      const status = await getMCPStatus();
-      setMCPStatus(status);
+      
+      // Fetch available tools
+      const toolsData = await getAgentTools();
+      setTools(toolsData);
+      
+      // Check Google Calendar auth status
+      const authStatus = await getGoogleAuthStatus();
+      setGoogleAuth(authStatus);
+      
     } catch (err) {
-      console.error("Failed to fetch MCP status:", err);
+      console.error("Failed to fetch tools and status:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleTestMCP = async (mcpName: string) => {
+  const handleTestTool = async (toolName: string, category: string) => {
     try {
-      setTestingMCP(mcpName);
-      const result = await testMCPConnection(mcpName);
+      setTestingTool(toolName);
       
-      // Show result in alert for now (could be improved with toast)
-      if (result.status === "connected") {
-        alert(`✅ ${mcpName} connected!\nTools available: ${result.tools_count}\n${result.tools?.join(', ')}`);
-      } else if (result.status === "disabled") {
-        alert(`⚠️ ${mcpName} is disabled.\n${result.message}`);
-      } else if (result.status === "not_configured") {
-        alert(`❌ ${mcpName} not configured.\nMissing: ${result.missing_vars?.join(', ')}`);
+      // Test the tool with a simple message
+      let testMessage = "";
+      if (category === "github") {
+        testMessage = "List open issues in the current repository";
+      } else if (category === "calendar") {
+        testMessage = "Check my calendar for tomorrow";
+      } else if (category === "slack") {
+        testMessage = "Test Slack connection";
       } else {
-        alert(`❌ ${mcpName} error: ${result.message}`);
+        testMessage = "What time is it?";
       }
       
-      // Refresh status
-      await fetchMCPStatus();
+      const result = await sendAgentMessage({
+        message: testMessage,
+        categories: [category]
+      });
+      
+      if (result.success) {
+        alert(`✅ Tool test successful!\n\nResponse: ${result.response}\n\nTools used: ${result.tools_used.join(', ') || 'None'}`);
+      } else {
+        alert(`❌ Tool test failed: ${result.error}`);
+      }
+      
     } catch (err) {
-      alert(`Failed to test ${mcpName}`);
+      alert(`Failed to test tool: ${err}`);
     } finally {
-      setTestingMCP(null);
+      setTestingTool(null);
     }
   };
 
-  // Legacy GitHub connection (for backward compatibility)
-  const handleGitHubConnect = async () => {
-    if (!githubToken || !githubRepo) {
-      setError("Please fill in both fields");
-      return;
-    }
-
-    const parts = githubRepo.split('/');
-    if (parts.length !== 2) {
-      setError("Repository must be in format: owner/repo");
-      return;
-    }
-
-    const [owner, repo] = parts;
-
-    setError("");
-    setConnectionStates(prev => ({ ...prev, github: "connecting" }));
+  const handleGoogleAuth = () => {
+    // Open Google OAuth in a new window
+    const authUrl = getGoogleAuthUrl();
+    const authWindow = window.open(authUrl, 'google-auth', 'width=600,height=700');
     
+    // Poll for auth completion
+    const checkInterval = setInterval(async () => {
+      if (authWindow?.closed) {
+        clearInterval(checkInterval);
+        // Refresh auth status
+        const status = await getGoogleAuthStatus();
+        setGoogleAuth(status);
+      }
+    }, 1000);
+  };
+
+  const handleGoogleDisconnect = async () => {
     try {
-      const { session_token } = await connectGitHub(githubToken, owner, repo);
-      
-      setSessionToken(session_token);
-      localStorage.setItem('github_repo', githubRepo);
-      
-      setConnectionStates(prev => ({ ...prev, github: "connected" }));
-      setGithubToken(""); // Clear token for security
-      setShowGitHubForm(false);
+      await disconnectGoogleCalendar();
+      const status = await getGoogleAuthStatus();
+      setGoogleAuth(status);
     } catch (err) {
-      setError("Failed to connect to GitHub");
-      setConnectionStates(prev => ({ ...prev, github: "error" }));
+      alert(`Failed to disconnect: ${err}`);
     }
   };
-
-  const handleDisconnect = () => {
-    localStorage.removeItem('session_token');
-    localStorage.removeItem('github_repo');
-    setConnectionStates(prev => ({ ...prev, github: "disconnected" }));
-    setGithubRepo("");
-    setGithubToken("");
-    setShowGitHubForm(false);
-  };
-
-  const githubState = connectionStates.github || "disconnected";
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -154,10 +143,10 @@ export function IntegrationsModal() {
       </DialogTrigger>
       <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto bg-gray-950 border-gray-700 backdrop-blur-xl">
         <DialogHeader>
-          <DialogTitle className="text-2xl font-light text-white">Integrations</DialogTitle>
-          {mcpStatus && (
+          <DialogTitle className="text-2xl font-light text-white">AI Agent Tools</DialogTitle>
+          {tools && (
             <p className="text-sm text-gray-400 mt-2">
-              {mcpStatus.enabled} of {mcpStatus.total} integrations enabled
+              {tools.total_categories} tool categories available
             </p>
           )}
         </DialogHeader>
@@ -166,257 +155,172 @@ export function IntegrationsModal() {
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-              <span className="ml-2 text-gray-400">Loading integrations...</span>
+              <span className="ml-2 text-gray-400">Loading tools...</span>
             </div>
           ) : (
             <>
-              {/* MCP Servers */}
-              {mcpStatus?.servers.map((server) => {
-                const Icon = iconMap[server.name] || Puzzle;
-                const isEnabled = server.enabled;
-                const isConfigured = server.configured;
-                const isConnected = isEnabled && isConfigured;
-                
-                return (
-                  <div
-                    key={server.name}
-                    className={`
-                      p-4 rounded-xl transition-all duration-200
-                      ${isConnected 
-                        ? "bg-emerald-500/5 border border-emerald-500/20" 
-                        : isEnabled
-                        ? "bg-yellow-500/5 border border-yellow-500/20"
-                        : "bg-gray-800/40 border border-gray-700"
-                      }
-                    `}
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`
-                        w-12 h-12 rounded-xl flex items-center justify-center transition-colors
-                        ${isConnected 
-                          ? "bg-emerald-500/10" 
-                          : isEnabled
-                          ? "bg-yellow-500/10"
-                          : "bg-gray-700/50"
-                        }
-                      `}>
-                        <Icon className={`
-                          w-6 h-6 transition-colors
-                          ${isConnected 
-                            ? "text-emerald-400" 
-                            : isEnabled
-                            ? "text-yellow-400"
-                            : "text-gray-400"
-                          }
-                        `} />
-                      </div>
-                      
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-white text-lg">
-                          {server.display_name}
-                        </h3>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          {server.capabilities.slice(0, 3).join(" • ")}
-                          {server.capabilities.length > 3 && ` • +${server.capabilities.length - 3} more`}
-                        </p>
-                      </div>
-                      
-                      <div className="flex items-center gap-2">
-                        {isConnected && (
-                          <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 rounded-full">
-                            <Check className="w-4 h-4 text-emerald-400" />
-                            <span className="text-sm text-emerald-400 font-medium">Ready</span>
-                          </div>
+              {/* Google Calendar OAuth Status (Special handling) */}
+              {googleAuth && (
+                <div className="p-4 rounded-xl bg-blue-500/5 border border-blue-500/20 mb-6">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Calendar className="w-6 h-6 text-blue-400" />
+                      <div>
+                        <h3 className="font-semibold text-white">Google Calendar</h3>
+                        {googleAuth.authenticated ? (
+                          <p className="text-sm text-gray-400">
+                            Connected as {googleAuth.email}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-gray-400">
+                            Connect to manage your calendar
+                          </p>
                         )}
-                        
-                        {isEnabled && !isConfigured && (
-                          <div className="flex flex-col items-end gap-1">
-                            <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500/10 rounded-full">
-                              <AlertCircle className="w-4 h-4 text-yellow-400" />
-                              <span className="text-sm text-yellow-400 font-medium">Missing Config</span>
-                            </div>
-                            {server.missing_vars && (
-                              <span className="text-xs text-gray-500">
-                                Missing: {server.missing_vars.join(", ")}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        
-                        {!isEnabled && (
-                          <span className="text-sm text-gray-500">Disabled</span>
-                        )}
-                        
-                        <Button
-                          onClick={() => handleTestMCP(server.name)}
-                          disabled={testingMCP === server.name}
-                          size="sm"
-                          variant="outline"
-                          className="ml-2"
-                        >
-                          {testingMCP === server.name ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            "Test"
-                          )}
-                        </Button>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-              
-              {/* Legacy GitHub Integration (if not using GitHub MCP) */}
-              {!mcpStatus?.servers.find(s => s.name === 'github')?.enabled && (
-                <div className="border-t border-gray-800 pt-4 mt-6">
-                  <p className="text-sm text-gray-500 mb-4">Legacy Integration (Use GitHub MCP instead)</p>
-                  <div className={`
-                    p-4 rounded-xl transition-all duration-200
-                    ${githubState === "connected" 
-                      ? "bg-emerald-500/5 border border-emerald-500/20" 
-                      : "bg-gray-800/40 border border-gray-700"
-                    }
-                  `}>
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className={`
-                        w-12 h-12 rounded-xl flex items-center justify-center transition-colors
-                        ${githubState === "connected" 
-                          ? "bg-emerald-500/10" 
-                          : "bg-gray-700/50"
-                        }
-                      `}>
-                        <Github className={`
-                          w-6 h-6 transition-colors
-                          ${githubState === "connected" 
-                            ? "text-emerald-400" 
-                            : "text-gray-300"
-                          }
-                        `} />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-white text-lg">GitHub (Legacy)</h3>
-                        <p className="text-sm text-gray-400 mt-0.5">
-                          {githubState === "connected" ? `Connected to ${githubRepo}` : "Connect to create issues and PRs"}
-                        </p>
-                      </div>
-                      {githubState === "connected" && (
+                    
+                    {googleAuth.authenticated ? (
+                      <div className="flex items-center gap-2">
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 rounded-full">
                           <Check className="w-4 h-4 text-emerald-400" />
                           <span className="text-sm text-emerald-400 font-medium">Connected</span>
                         </div>
-                      )}
-                    </div>
-
-                    {showGitHubForm && githubState !== "connected" && (
-                      <div className="space-y-3 mb-4">
-                        <div>
-                          <Label htmlFor="token" className="text-sm text-gray-300">Personal Access Token</Label>
-                          <Input
-                            id="token"
-                            type="password"
-                            placeholder="ghp_xxxxxxxxxxxx"
-                            value={githubToken}
-                            onChange={(e) => setGithubToken(e.target.value)}
-                            className="mt-1 bg-gray-900/50 border-gray-700 text-white"
-                          />
-                          <a 
-                            href="https://github.com/settings/tokens/new?description=Voice%20Transcription%20App&scopes=repo" 
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1.5"
-                          >
-                            Generate a new token on GitHub →
-                          </a>
-                        </div>
-                        
-                        <div>
-                          <Label htmlFor="repo" className="text-sm text-gray-300">Repository</Label>
-                          <Input
-                            id="repo"
-                            placeholder="owner/repo"
-                            value={githubRepo}
-                            onChange={(e) => setGithubRepo(e.target.value)}
-                            className="mt-1 bg-gray-900/50 border-gray-700 text-white"
-                          />
-                        </div>
-
-                        {error && (
-                          <div className="p-2 bg-red-500/10 border border-red-500/20 rounded">
-                            <p className="text-sm text-red-400">{error}</p>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2">
-                          <Button
-                            onClick={handleGitHubConnect}
-                            disabled={githubState === "connecting" || !githubToken || !githubRepo}
-                            size="sm"
-                            className="flex-1"
-                          >
-                            {githubState === "connecting" ? (
-                              <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                Connecting...
-                              </>
-                            ) : (
-                              "Save"
-                            )}
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              setShowGitHubForm(false);
-                              setError("");
-                              setGithubToken("");
-                              setGithubRepo("");
-                            }}
-                            variant="outline"
-                            size="sm"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
+                        <Button
+                          onClick={handleGoogleDisconnect}
+                          size="sm"
+                          variant="ghost"
+                          className="text-gray-400 hover:text-red-400"
+                        >
+                          <LogOut className="w-4 h-4" />
+                        </Button>
                       </div>
-                    )}
-
-                    {!showGitHubForm && (
-                      <div className="flex gap-2">
-                        {githubState === "connected" ? (
-                          <Button
-                            onClick={handleDisconnect}
-                            variant="outline"
-                            size="sm"
-                            className="hover:bg-red-500/10 hover:text-red-400 hover:border-red-400/50"
-                          >
-                            Disconnect
-                          </Button>
-                        ) : (
-                          <Button
-                            onClick={() => setShowGitHubForm(true)}
-                            size="sm"
-                          >
-                            Connect
-                          </Button>
-                        )}
-                      </div>
+                    ) : (
+                      <Button
+                        onClick={handleGoogleAuth}
+                        size="sm"
+                        className="bg-blue-600 hover:bg-blue-700"
+                      >
+                        <ExternalLink className="w-4 h-4 mr-2" />
+                        Connect
+                      </Button>
                     )}
                   </div>
                 </div>
               )}
               
-              {/* Configuration Help */}
+              {/* Tool Categories */}
+              {tools && Object.entries(tools.categories).map(([categoryKey, category]) => {
+                const Icon = iconMap[categoryKey] || Calculator;
+                const colors = categoryColors[categoryKey] || { 
+                  bg: "bg-gray-500/10", 
+                  text: "text-gray-400", 
+                  border: "border-gray-500/20" 
+                };
+                const isExpanded = expandedCategory === categoryKey;
+                const toolCount = category.tools.length;
+                
+                return (
+                  <div
+                    key={categoryKey}
+                    className={`p-4 rounded-xl transition-all duration-200 ${colors.bg} border ${colors.border}`}
+                  >
+                    <div 
+                      className="flex items-center gap-4 cursor-pointer"
+                      onClick={() => setExpandedCategory(isExpanded ? null : categoryKey)}
+                    >
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${colors.bg}`}>
+                        <Icon className={`w-6 h-6 ${colors.text}`} />
+                      </div>
+                      
+                      <div className="flex-1">
+                        <h3 className="font-semibold text-white text-lg">
+                          {category.name}
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {category.description}
+                        </p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <span className={`text-sm ${colors.text} font-medium`}>
+                          {toolCount} tools
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={colors.text}
+                        >
+                          {isExpanded ? "▲" : "▼"}
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    {/* Expanded Tool List */}
+                    {isExpanded && (
+                      <div className="mt-4 space-y-2 pl-16">
+                        {category.tools.map((tool) => (
+                          <div 
+                            key={tool.name}
+                            className="flex items-center justify-between p-2 rounded-lg bg-gray-900/30"
+                          >
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-white">
+                                {tool.name.replace(/_/g, ' ')}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                {tool.description}
+                              </p>
+                            </div>
+                            <Button
+                              onClick={() => handleTestTool(tool.name, categoryKey)}
+                              disabled={testingTool === tool.name}
+                              size="sm"
+                              variant="ghost"
+                              className={`ml-2 ${colors.text}`}
+                            >
+                              {testingTool === tool.name ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                "Test"
+                              )}
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
+              {/* Examples Section */}
               <div className="mt-6 p-4 bg-gray-800/30 rounded-lg border border-gray-700">
-                <h4 className="text-sm font-semibold text-gray-300 mb-2">Configuration Help</h4>
-                <p className="text-xs text-gray-400 mb-2">
-                  To enable MCP integrations, add environment variables to your backend .env file:
-                </p>
-                <pre className="text-xs bg-gray-900/50 p-2 rounded overflow-x-auto">
-                  <code>{`# Example for Google Calendar
-ENABLE_GOOGLE_CALENDAR_MCP=true
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_secret
-
-# See MCP_INTEGRATION_GUIDE.md for details`}</code>
-                </pre>
+                <h4 className="text-sm font-semibold text-gray-300 mb-3">Example Commands</h4>
+                <div className="space-y-2">
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs text-gray-500">•</span>
+                    <p className="text-xs text-gray-400">
+                      "Create a GitHub issue about the bug in the login system"
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs text-gray-500">•</span>
+                    <p className="text-xs text-gray-400">
+                      "Schedule a meeting tomorrow at 2pm for 30 minutes"
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs text-gray-500">•</span>
+                    <p className="text-xs text-gray-400">
+                      "Check my calendar availability for next Tuesday"
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-xs text-gray-500">•</span>
+                    <p className="text-xs text-gray-400">
+                      "Calculate the hours in a work week"
+                    </p>
+                  </div>
+                </div>
               </div>
             </>
           )}
