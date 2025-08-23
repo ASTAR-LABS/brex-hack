@@ -87,11 +87,16 @@ class WebSocketService:
             logger.info(f"WebSocket disconnected for session {session.session_id}")
         except Exception as e:
             logger.error(f"Error in WebSocket handler: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e),
-                "timestamp": datetime.now().isoformat()
-            })
+            # Only try to send error if websocket is still open
+            try:
+                if websocket.client_state.value == 1:  # WebSocketState.CONNECTED
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+            except:
+                pass
         finally:
             transcript = session.get_full_text()
             if transcript:

@@ -1,103 +1,31 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { Mic, MicOff } from "lucide-react";
+import { Mic, MicOff, X, Wifi, WifiOff } from "lucide-react";
+import { useTranscription } from "@/hooks/use-transcription";
 
 export default function Home() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [transcription, setTranscription] = useState<string[]>([]);
-  const [waveformData, setWaveformData] = useState<number[]>(new Array(40).fill(0));
-  
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
 
-  const mockTranscription = [
-    "The", "essence", "of", "luxury", "lies", "not", "in", "excess,",
-    "but", "in", "the", "perfect", "balance", "of", "simplicity", "and", "sophistication.",
-    "Every", "detail", "matters", "when", "crafting", "an", "experience",
-    "that", "transcends", "the", "ordinary."
-  ];
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      
-      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      audioContextRef.current = new AudioContextClass();
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 256;
-      
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      source.connect(analyserRef.current);
-      
-      setIsRecording(true);
-      setTranscription([]);
-      visualize();
-      startMockStreaming();
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-    }
-  };
-
-  const stopRecording = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    setIsRecording(false);
-    setWaveformData(new Array(40).fill(0));
-  };
-
-  const visualize = () => {
-    if (!analyserRef.current) return;
-    
-    const bufferLength = analyserRef.current.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    
-    const draw = () => {
-      if (!isRecording) return;
-      
-      animationFrameRef.current = requestAnimationFrame(draw);
-      analyserRef.current!.getByteFrequencyData(dataArray);
-      
-      
-      const bars = 40;
-      const barData = [];
-      const step = Math.floor(bufferLength / bars);
-      
-      for (let i = 0; i < bars; i++) {
-        const start = i * step;
-        const end = start + step;
-        const slice = Array.from(dataArray.slice(start, end));
-        const avg = slice.reduce((a, b) => a + b, 0) / slice.length;
-        barData.push(avg / 255);
-      }
-      
-      setWaveformData(barData);
-    };
-    
-    draw();
-  };
-
-  const startMockStreaming = () => {
-    let wordIndex = 0;
-    const streamWords = () => {
-      if (wordIndex < mockTranscription.length && isRecording) {
-        setTranscription(prev => [...prev, mockTranscription[wordIndex]]);
-        wordIndex++;
-        setTimeout(streamWords, 150 + Math.random() * 100);
-      }
-    };
-    setTimeout(streamWords, 500);
-  };
+  const {
+    isRecording,
+    transcription,
+    connectionStatus,
+    session,
+    waveformData,
+    startRecording,
+    stopRecording,
+    clearTranscription,
+    isConnecting,
+  } = useTranscription({
+    onTranscription: (text) => {
+      console.log("New transcription:", text);
+    },
+    onSessionStart: (sessionId) => {
+      console.log("Session started:", sessionId);
+    },
+    onError: (error) => {
+      console.error("Transcription error:", error);
+    },
+  });
 
   const toggleRecording = () => {
     if (isRecording) {
@@ -107,12 +35,52 @@ export default function Home() {
     }
   };
 
+  // Connection status indicator
+  const getConnectionColor = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'text-green-500';
+      case 'connecting': return 'text-yellow-500';
+      case 'error': return 'text-red-500';
+      default: return 'text-gray-500';
+    }
+  };
+
+  const getConnectionIcon = () => {
+    return connectionStatus === 'connected' ? 
+      <Wifi className="w-4 h-4" /> : 
+      <WifiOff className="w-4 h-4" />;
+  };
+
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
+      {/* Connection Status */}
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <div className={`flex items-center gap-2 ${getConnectionColor()}`}>
+          {getConnectionIcon()}
+          <span className="text-xs uppercase tracking-wider">
+            {connectionStatus}
+          </span>
+        </div>
+      </div>
+
+      {/* Session Info */}
+      {session && (
+        <div className="absolute top-4 left-4 text-xs text-gray-500">
+          Session: {session.id?.slice(0, 8)}...
+        </div>
+      )}
+
       {/* Title when not recording */}
       {!isRecording && transcription.length === 0 && (
         <div className="mb-16 text-center animate-fade-in">
-          <h1 className="text-3xl text-gray-400 font-light">What would you like to record?</h1>
+          <h1 className="text-3xl text-gray-400 font-light">
+            What would you like to record?
+          </h1>
+          {connectionStatus === 'error' && (
+            <p className="text-red-500 text-sm mt-2">
+              Connection error. Please check your backend is running.
+            </p>
+          )}
         </div>
       )}
 
@@ -132,9 +100,10 @@ export default function Home() {
         </div>
       )}
 
-      {/* Record Button - Simplified */}
+      {/* Record Button */}
       <button
         onClick={toggleRecording}
+        disabled={isConnecting}
         className={`
           relative w-24 h-24 rounded-full border backdrop-blur-sm
           transition-all duration-200
@@ -142,9 +111,9 @@ export default function Home() {
             ? 'bg-red-500/10 border-red-500' 
             : 'bg-gray-900/30 border-gray-700 hover:border-gray-600'
           }
+          ${isConnecting ? 'opacity-50 cursor-not-allowed' : ''}
         `}
       >
-        {/* Icon */}
         <div className="flex items-center justify-center w-full h-full">
           {isRecording ? (
             <MicOff className="w-8 h-8 text-white" />
@@ -162,12 +131,37 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* Connecting spinner */}
+        {isConnecting && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-16 h-16 border-2 border-gray-600 border-t-white rounded-full animate-spin" />
+          </div>
+        )}
       </button>
 
       {/* Transcription Display */}
       <div className="w-full max-w-4xl mt-12 min-h-[200px]">
         {(isRecording || transcription.length > 0) && (
-          <div className="bg-gray-900/30 border border-gray-800 rounded-2xl p-8 backdrop-blur-sm">
+          <div className="bg-gray-900/30 border border-gray-800 rounded-2xl p-8 backdrop-blur-sm relative">
+            {/* Clear button */}
+            {transcription.length > 0 && !isRecording && (
+              <button
+                onClick={() => clearTranscription()}
+                className="absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-300 transition-colors"
+                title="Clear transcript"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+            
+            {/* Stats */}
+            {transcription.length > 0 && (
+              <div className="absolute top-4 left-4 text-xs text-gray-500">
+                {transcription.length} words
+              </div>
+            )}
+            
             <p className="text-lg leading-relaxed text-gray-300">
               {transcription.map((word, i) => (
                 <span
