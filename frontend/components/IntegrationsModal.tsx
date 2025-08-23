@@ -146,6 +146,14 @@ export function IntegrationsModal() {
                     onChange={(e) => setGithubToken(e.target.value)}
                     className="mt-1 bg-gray-900/50 border-gray-700 text-white"
                   />
+                  <a 
+                    href="https://github.com/settings/tokens/new?description=Voice%20Transcription%20App&scopes=repo" 
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1.5"
+                  >
+                    Generate a new token on GitHub →
+                  </a>
                 </div>
                 
                 <div>
