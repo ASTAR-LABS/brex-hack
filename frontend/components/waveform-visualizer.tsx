@@ -9,7 +9,7 @@ export function WaveformVisualizer({ data, isActive }: WaveformVisualizerProps) 
   if (!isActive) return null;
 
   return (
-    <div className="w-full max-w-5xl mb-12 h-40 flex items-center justify-center gap-[2px]">
+    <div className="w-full max-w-5xl mt-12 h-40 flex items-center justify-center gap-[2px]">
       {data.map((level, i) => (
         <div
           key={i}

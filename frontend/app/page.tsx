@@ -1,14 +1,12 @@
 "use client";
 
 import { useTranscription } from "@/hooks/use-transcription";
-import {
-  ConnectionStatus,
-  SessionInfo,
-  RecordingTitle,
-  WaveformVisualizer,
-  RecordButton,
-  TranscriptionDisplay,
-} from "@/components";
+import { ConnectionStatus } from "@/components/connection-status";
+import { SessionInfo } from "@/components/session-info";
+import { RecordingTitle } from "@/components/recording-title";
+import { WaveformVisualizer } from "@/components/waveform-visualizer";
+import { RecordButton } from "@/components/record-button";
+import { TranscriptionDisplay } from "@/components/transcription-display";
 
 export default function Home() {
   const {
@@ -56,24 +54,24 @@ export default function Home() {
         connectionError={connectionStatus === 'error'}
       />
 
-      {/* Waveform Visualization */}
-      <WaveformVisualizer 
-        data={waveformData}
-        isActive={isRecording}
+      {/* Transcription Display - Now on top */}
+      <TranscriptionDisplay
+        transcription={transcription}
+        isRecording={isRecording}
+        onClear={clearTranscription}
       />
 
-      {/* Record Button */}
+      {/* Record Button - In the middle */}
       <RecordButton
         isRecording={isRecording}
         isConnecting={isConnecting}
         onClick={toggleRecording}
       />
 
-      {/* Transcription Display */}
-      <TranscriptionDisplay
-        transcription={transcription}
-        isRecording={isRecording}
-        onClear={clearTranscription}
+      {/* Waveform Visualization - Now on bottom */}
+      <WaveformVisualizer 
+        data={waveformData}
+        isActive={isRecording}
       />
 
       <style jsx>{`
