@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Audio Processing Settings
     audio_sample_rate: int = 16000
     audio_chunk_duration_ms: int = 30
-    audio_buffer_duration_ms: int = 1000  # Reduced from 1500ms for faster response
+    audio_buffer_duration_ms: int = 1500  # Reduced from 1500ms for faster response
     vad_aggressiveness: int = 2
     vad_enabled: bool = False  # Disable VAD for immediate processing
 
