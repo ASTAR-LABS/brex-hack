@@ -114,7 +114,28 @@ async def extract_actions(
         if not input_data.text:
             raise HTTPException(status_code=400, detail="Text input cannot be empty")
         
-        result = await action_service.extract_actions(input_data.text)
+        # Get integration config for agentic mode
+        integration_config = {}
+        if session_token and session_token != "anonymous":
+            creds_result = await db.execute(
+                select(IntegrationCredentials).where(
+                    IntegrationCredentials.session_token == session_token
+                )
+            )
+            creds = creds_result.scalar_one_or_none()
+            
+            if creds:
+                integration_config = {
+                    "github_token": creds.github_token,
+                    "github_owner": creds.github_owner,
+                    "github_repo": creds.github_repo
+                }
+        
+        result = await action_service.extract_actions(
+            text=input_data.text,
+            session_token=session_token,
+            integration_config=integration_config
+        )
         
         if "error" in result and result["error"]:
             logger.error(f"Action extraction error: {result['error']}")

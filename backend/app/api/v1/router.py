@@ -1,10 +1,13 @@
 from fastapi import APIRouter, WebSocket
-from app.api.v1.endpoints import actions
+from app.api.v1.endpoints import actions, mcp
 
 router = APIRouter()
 
 # Include Actions endpoints
 router.include_router(actions.router, prefix="/actions", tags=["actions"])
+
+# Include MCP endpoints
+router.include_router(mcp.router, prefix="/mcp", tags=["mcp"])
 
 # Register WebSocket endpoint
 @router.websocket("/ws/audio")

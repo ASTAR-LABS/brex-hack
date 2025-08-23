@@ -12,7 +12,13 @@ webrtcvad
 scipy
 langchain
 langchain-cerebras
+langchain-community
+langgraph
+langchain-mcp-adapters
+langchain-openai
+nest-asyncio
 sqlalchemy
-aiosqliteaiosqlite
+aiosqlite
+redis
+httpx
 greenlet
-langchain-cerebras

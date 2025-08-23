@@ -5,6 +5,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from app.core.config import settings
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +26,23 @@ class ActionsList(BaseModel):
 
 class ActionExtractionService:
     def __init__(self):
-        if not settings.cerebras_api_key:
-            logger.warning("CEREBRAS_API_KEY not set - action extraction will not work")
-            self.llm = None
-        else:
-            self.llm = ChatCerebras(
-                api_key=settings.cerebras_api_key,
-                model=settings.cerebras_model,
-                temperature=settings.cerebras_temperature,
-                max_tokens=settings.cerebras_max_tokens,
-            )
-
-        self.parser = JsonOutputParser(pydantic_object=ActionsList)
+        self.use_agent = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
+        self.orchestrator = None
+        
+        if not self.use_agent:
+            # Traditional extraction mode
+            if not settings.cerebras_api_key:
+                logger.warning("CEREBRAS_API_KEY not set - action extraction will not work")
+                self.llm = None
+            else:
+                self.llm = ChatCerebras(
+                    api_key=settings.cerebras_api_key,
+                    model=settings.cerebras_model,
+                    temperature=settings.cerebras_temperature,
+                    max_tokens=settings.cerebras_max_tokens,
+                )
+            
+            self.parser = JsonOutputParser(pydantic_object=ActionsList)
 
         self.prompt = ChatPromptTemplate.from_messages(
             [
@@ -84,9 +90,43 @@ IMPORTANT:
                 ("user", "Extract actionable items from this text: {text}"),
             ]
         )
-
-    async def extract_actions(self, text: str, executed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
+    
+    async def initialize_agent(self, session_token: Optional[str] = None, integration_config: Optional[Dict] = None):
+        """Initialize the agentic orchestrator if in agent mode"""
+        if self.use_agent and not self.orchestrator:
+            from app.services.agentic_orchestrator import AgenticOrchestrator
+            self.orchestrator = AgenticOrchestrator()
+            await self.orchestrator.initialize(session_token, integration_config)
+            logger.info("Initialized agentic orchestrator")
+    
+    async def extract_actions(self, text: str, session_token: Optional[str] = None, integration_config: Optional[Dict] = None, executed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
         try:
+            # Use agentic mode if enabled
+            if self.use_agent:
+                if not self.orchestrator:
+                    await self.initialize_agent(session_token, integration_config)
+                
+                if self.orchestrator:
+                    # Use the agent to process the request
+                    result = await self.orchestrator.process_request(
+                        text=text,
+                        session_token=session_token or "anonymous"
+                    )
+                    
+                    # Convert agent result to expected format
+                    if "error" not in result or not result["error"]:
+                        return {
+                            "actions": result.get("actions", []),
+                            "agent_response": result.get("result", ""),
+                            "error": None
+                        }
+                    else:
+                        return {
+                            "actions": [],
+                            "error": result.get("error")
+                        }
+            
+            # Fallback to traditional extraction
             if not self.llm:
                 return {"actions": [], "error": "Cerebras API key not configured"}
 
