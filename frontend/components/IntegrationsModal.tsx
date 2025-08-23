@@ -19,6 +19,7 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 export function IntegrationsModal() {
   const [open, setOpen] = useState(false);
   const [connectionStates, setConnectionStates] = useState<Record<string, ConnectionState>>({});
+  const [showGitHubForm, setShowGitHubForm] = useState(false);
   const [githubToken, setGithubToken] = useState("");
   const [githubRepo, setGithubRepo] = useState("");
   const [error, setError] = useState("");
@@ -60,6 +61,7 @@ export function IntegrationsModal() {
       
       setConnectionStates(prev => ({ ...prev, github: "connected" }));
       setGithubToken(""); // Clear token for security
+      setShowGitHubForm(false);
     } catch (err) {
       setError("Failed to connect to GitHub");
       setConnectionStates(prev => ({ ...prev, github: "error" }));
@@ -72,6 +74,7 @@ export function IntegrationsModal() {
     setConnectionStates(prev => ({ ...prev, github: "disconnected" }));
     setGithubRepo("");
     setGithubToken("");
+    setShowGitHubForm(false);
   };
 
   const githubState = connectionStates.github || "disconnected";
@@ -131,8 +134,8 @@ export function IntegrationsModal() {
               )}
             </div>
 
-            {githubState !== "connected" && (
-              <div className="space-y-3">
+            {showGitHubForm && githubState !== "connected" && (
+              <div className="space-y-3 mb-4">
                 <div>
                   <Label htmlFor="token" className="text-sm text-gray-300">Personal Access Token</Label>
                   <Input
@@ -161,36 +164,60 @@ export function IntegrationsModal() {
                     <p className="text-sm text-red-400">{error}</p>
                   </div>
                 )}
+
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleGitHubConnect}
+                    disabled={githubState === "connecting" || !githubToken || !githubRepo}
+                    size="sm"
+                    className="flex-1"
+                  >
+                    {githubState === "connecting" ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      "Save"
+                    )}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setShowGitHubForm(false);
+                      setError("");
+                      setGithubToken("");
+                      setGithubRepo("");
+                    }}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Cancel
+                  </Button>
+                </div>
               </div>
             )}
 
-            <div className="mt-4 flex gap-2">
-              {githubState === "connected" ? (
-                <Button
-                  onClick={handleDisconnect}
-                  variant="outline"
-                  size="sm"
-                  className="hover:bg-red-500/10 hover:text-red-400 hover:border-red-400/50"
-                >
-                  Disconnect
-                </Button>
-              ) : (
-                <Button
-                  onClick={handleGitHubConnect}
-                  disabled={githubState === "connecting" || !githubToken || !githubRepo}
-                  size="sm"
-                >
-                  {githubState === "connecting" ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    "Connect"
-                  )}
-                </Button>
-              )}
-            </div>
+            {!showGitHubForm && (
+              <div className="flex gap-2">
+                {githubState === "connected" ? (
+                  <Button
+                    onClick={handleDisconnect}
+                    variant="outline"
+                    size="sm"
+                    className="hover:bg-red-500/10 hover:text-red-400 hover:border-red-400/50"
+                  >
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => setShowGitHubForm(true)}
+                    size="sm"
+                  >
+                    Connect
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Other integrations (disabled for now) */}
