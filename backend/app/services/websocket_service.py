@@ -108,7 +108,7 @@ class WebSocketService:
                                 context_words=session.word_history,
                             )
                         )
-                        print(session.word_history)
+                        
                         # Update session's context with the new words
                         if is_final and updated_context:
                             session.word_history = updated_context

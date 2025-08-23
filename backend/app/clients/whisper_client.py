@@ -54,13 +54,34 @@ class WhisperClient:
                     language=language,
                     print_realtime=False,
                     single_segment=True,  # Useful for streaming
-                    initial_prompt=initial_prompt  # Provide context
+                    initial_prompt=initial_prompt,  # Provide context
+                    # Optimal parameters for whisper.cpp
+                    beam_size=2,  # Optimal for whisper.cpp (not 5)
+                    temperature=0.0,  # Deterministic output
+                    no_speech_threshold=0.6,  # Filter silence
+                    compression_ratio_threshold=2.4,  # Reject gibberish
+                    suppress_blank=True,  # Suppress blank outputs
+                    suppress_non_speech_tokens=True  # Remove [MUSIC] etc
                 )
                 
                 os.unlink(tmp_file.name)
                 
                 if not segments:
                     return "", False, context_words
+                
+                # Quality filtering
+                for segment in segments:
+                    # Check if transcription quality metrics are available
+                    if hasattr(segment, 'no_speech_prob') and segment.no_speech_prob > 0.6:
+                        logger.debug("High no_speech probability, skipping")
+                        return "", False, context_words
+                    
+                    # Log compression ratio for debugging
+                    if hasattr(segment, 'compression_ratio'):
+                        logger.debug(f"Compression ratio: {segment.compression_ratio}")
+                        if segment.compression_ratio > 2.4:
+                            logger.warning("Likely gibberish (high compression ratio), rejecting")
+                            return "", False, context_words
                 
                 full_text = " ".join([segment.text.strip() for segment in segments])
                 
@@ -86,17 +107,18 @@ class WhisperClient:
         
         text = text.strip()
         
-        sentence_endings = ['.', '!', '?', '。', '！', '？']
+        # Don't mark very short text as complete
+        if len(text) < 20:  # Characters, not words
+            return False
         
+        # Trust Whisper's punctuation for sentence endings
+        sentence_endings = ['.', '!', '?', '。', '！', '？']
         if any(text.endswith(ending) for ending in sentence_endings):
             return True
         
-        pause_indicators = [',', ';', ':', '、', '；', '：']
+        # Only force completion for very long text without punctuation
         words = text.split()
-        if len(words) > 10 and any(char in text for char in pause_indicators):
-            return True
-        
-        if len(words) > 15:
+        if len(words) > 25:  # Much higher threshold
             return True
         
         return False
