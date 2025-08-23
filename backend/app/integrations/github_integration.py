@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import httpx
 import logging
 
@@ -77,6 +77,52 @@ class GitHubIntegration:
                 
         except Exception as e:
             logger.error(f"Failed to get PR: {e}")
+            return {"error": str(e)}
+    
+    async def update_issue(self, issue_number: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Update an existing issue"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return {"error": "GitHub credentials not configured"}
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/issues/{issue_number}"
+            
+            # Filter valid update fields
+            valid_fields = ["title", "body", "state", "labels", "assignees", "milestone"]
+            data = {k: v for k, v in updates.items() if k in valid_fields}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.patch(
+                    url,
+                    headers=self.headers,
+                    json=data
+                )
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Failed to update issue: {e}")
+            return {"error": str(e)}
+    
+    async def add_issue_labels(self, issue_number: int, labels: List[str]) -> Dict[str, Any]:
+        """Add labels to an existing issue"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return {"error": "GitHub credentials not configured"}
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/issues/{issue_number}/labels"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers=self.headers,
+                    json={"labels": labels}
+                )
+                response.raise_for_status()
+                return {"success": True, "labels": labels}
+                
+        except Exception as e:
+            logger.error(f"Failed to add labels: {e}")
             return {"error": str(e)}
     
     async def test_connection(self) -> bool:

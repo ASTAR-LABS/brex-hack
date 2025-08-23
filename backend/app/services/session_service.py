@@ -20,6 +20,8 @@ class Session:
         self.is_active = True
         self.is_paused = False
         self.word_history: List[str] = []  # Store session-specific word history for Whisper context
+        self.executed_actions: Dict[str, Dict[str, Any]] = {}  # Track executed actions {action_id: {type, description, github_id, timestamp}}
+        self.last_action_id: Optional[str] = None  # Track most recent action for "that/it" references
         
     def update_activity(self):
         self.last_activity = datetime.now()
@@ -33,6 +35,20 @@ class Session:
     
     def get_full_text(self) -> str:
         return " ".join(self.full_transcript) + (" " + self.current_buffer if self.current_buffer else "")
+    
+    def add_executed_action(self, action_id: str, action_type: str, description: str, github_id: Optional[Any] = None) -> None:
+        """Track an executed action for duplicate prevention and updates"""
+        self.executed_actions[action_id] = {
+            "type": action_type,
+            "description": description,
+            "github_id": github_id,  # GitHub issue/PR number if applicable
+            "timestamp": datetime.now().isoformat()
+        }
+        self.last_action_id = action_id
+    
+    def get_executed_actions_summary(self) -> List[str]:
+        """Get a summary of executed actions for context"""
+        return [f"[{a['type']}] {a['description']}" for a in self.executed_actions.values()]
     
     def pause(self):
         self.is_paused = True

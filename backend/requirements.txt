@@ -13,4 +13,6 @@ scipy
 langchain
 langchain-cerebras
 sqlalchemy
-aiosqlite
+aiosqliteaiosqlite
+greenlet
+langchain-cerebras
