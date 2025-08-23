@@ -2,8 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.config import settings
+from app.core.database import init_db
 from app.api.v1.router import router as api_v1_router
 from app.services.websocket_service import WebSocketService
+from app.services.action_executor_service import ActionExecutorService
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -11,16 +13,20 @@ logger = logging.getLogger(__name__)
 
 # Initialize services
 websocket_service = WebSocketService()
+executor_service = ActionExecutorService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up services...")
+    await init_db()
     await websocket_service.start()
+    await executor_service.start()
     yield
     # Shutdown
     logger.info("Shutting down services...")
     await websocket_service.stop()
+    await executor_service.stop()
 
 # Create FastAPI app
 app = FastAPI(

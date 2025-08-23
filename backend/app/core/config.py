@@ -33,13 +33,24 @@ class Settings(BaseSettings):
     # Audio Processing Settings
     audio_sample_rate: int = 16000
     audio_chunk_duration_ms: int = 30
-    audio_buffer_duration_ms: int = 1500  # Reduced from 1500ms for faster response
+    audio_buffer_duration_ms: int = 1000  # Reduced from 1500ms for faster response
     vad_aggressiveness: int = 2
     vad_enabled: bool = False  # Disable VAD for immediate processing
 
     # Session Settings
     session_timeout_minutes: int = 30
     session_persistence_minutes: int = 10  # Keep paused sessions for 10 minutes
+
+    # Cerebras Settings
+    cerebras_api_key: Optional[str] = os.getenv("CEREBRAS_API_KEY")
+    cerebras_model: str = "gpt-oss-120b"
+    cerebras_temperature: float = 0.7
+    cerebras_max_tokens: int = 1024
+
+    # GitHub Integration
+    github_token: Optional[str] = os.getenv("GITHUB_TOKEN")
+    github_owner: Optional[str] = os.getenv("GITHUB_OWNER")
+    github_repo: Optional[str] = os.getenv("GITHUB_REPO")
 
     # CORS Settings
     cors_origins: list = ["*"]
