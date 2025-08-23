@@ -164,25 +164,50 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       }
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-
-      processorRef.current.onaudioprocess = (e) => {
-        if (!websocketManager.isConnected()) return;
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcmData = new Int16Array(inputData.length);
-
-        // Convert Float32 to Int16 (PCM)
-        for (let i = 0; i < inputData.length; i++) {
-          pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+      
+      // Try to use AudioWorklet if available (better performance)
+      if ('audioWorklet' in audioContextRef.current) {
+        try {
+          await audioContextRef.current.audioWorklet.addModule('/audio-processor.worklet.js');
+          const workletNode = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
+          
+          workletNode.port.onmessage = (event) => {
+            if (event.data.audio && websocketManager.isConnected()) {
+              websocketManager.send(event.data.audio);
+            }
+          };
+          
+          source.connect(workletNode);
+          console.log('Using AudioWorklet for audio processing');
+        } catch (e) {
+          console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
+          // Fall through to ScriptProcessor
         }
+      }
+      
+      // Fallback to ScriptProcessor if AudioWorklet not available or failed
+      if (!('audioWorklet' in audioContextRef.current) || !source.numberOfOutputs) {
+        processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
 
-        // Send audio data
-        websocketManager.send(pcmData.buffer);
-      };
+        processorRef.current.onaudioprocess = (e) => {
+          if (!websocketManager.isConnected()) return;
 
-      source.connect(processorRef.current);
-      processorRef.current.connect(audioContextRef.current.destination);
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcmData = new Int16Array(inputData.length);
+
+          // Convert Float32 to Int16 (PCM)
+          for (let i = 0; i < inputData.length; i++) {
+            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+          }
+
+          // Send audio data
+          websocketManager.send(pcmData.buffer);
+        };
+
+        source.connect(processorRef.current);
+        processorRef.current.connect(audioContextRef.current.destination);
+        console.log('Using ScriptProcessor for audio processing');
+      }
       
       // Set up visualization context (separate from recording)
       visualizationContextRef.current = new AudioContextClass();
