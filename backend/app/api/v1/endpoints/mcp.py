@@ -1,11 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
 from app.core.mcp_registry import MCPManager, MCPServer
+from pydantic import BaseModel
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+class ProcessRequest(BaseModel):
+    text: str
+    session_token: str = "default"
 
 @router.get("/status")
 async def get_mcp_status() -> Dict[str, Any]:
@@ -153,3 +158,44 @@ async def test_mcp_connection(mcp_name: str):
             "status": "error",
             "message": f"Failed to connect to {mcp_name}: {str(e)}"
         }
+
+@router.post("/process")
+async def process_text(request: ProcessRequest) -> Dict[str, Any]:
+    """
+    Process text input using the agentic orchestrator with MCP tools.
+    This endpoint takes natural language input and executes actions using available MCPs.
+    """
+    try:
+        from app.services.agentic_orchestrator import AgenticOrchestrator
+        import os
+        
+        # Build integration config from environment
+        integration_config = {}
+        if os.getenv("GITHUB_TOKEN"):
+            integration_config["github_token"] = os.getenv("GITHUB_TOKEN")
+            integration_config["github_owner"] = os.getenv("GITHUB_OWNER", "")
+            integration_config["github_repo"] = os.getenv("GITHUB_REPO", "")
+        
+        # Initialize orchestrator
+        orchestrator = AgenticOrchestrator()
+        await orchestrator.initialize(
+            session_token=request.session_token,
+            integration_config=integration_config
+        )
+        
+        # Process the request
+        result = await orchestrator.process_request(
+            text=request.text,
+            session_token=request.session_token
+        )
+        
+        return {
+            "success": result.get("error") is None,
+            "response": result.get("result", ""),
+            "actions": result.get("actions", []),
+            "error": result.get("error")
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing text: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

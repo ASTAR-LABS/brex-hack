@@ -79,7 +79,7 @@ class GitHubIntegration:
             logger.error(f"Failed to get PR: {e}")
             return {"error": str(e)}
     
-    async def update_issue(self, issue_number: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_issue(self, issue_number: int, **kwargs) -> Dict[str, Any]:
         """Update an existing issue"""
         try:
             if not all([self.token, self.owner, self.repo]):
@@ -89,7 +89,7 @@ class GitHubIntegration:
             
             # Filter valid update fields
             valid_fields = ["title", "body", "state", "labels", "assignees", "milestone"]
-            data = {k: v for k, v in updates.items() if k in valid_fields}
+            data = {k: v for k, v in kwargs.items() if k in valid_fields}
             
             async with httpx.AsyncClient() as client:
                 response = await client.patch(
@@ -124,6 +124,88 @@ class GitHubIntegration:
         except Exception as e:
             logger.error(f"Failed to add labels: {e}")
             return {"error": str(e)}
+    
+    async def add_issue_comment(self, issue_number: int, comment: str) -> Dict[str, Any]:
+        """Add a comment to an issue"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return {"error": "GitHub credentials not configured"}
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/issues/{issue_number}/comments"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    headers=self.headers,
+                    json={"body": comment}
+                )
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Failed to add issue comment: {e}")
+            return {"error": str(e)}
+    
+    async def list_issues(self, state: str = "open", limit: int = 10) -> List[Dict[str, Any]]:
+        """List issues in the repository"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return []
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/issues"
+            params = {"state": state, "per_page": limit}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=self.headers, params=params)
+                response.raise_for_status()
+                # Filter out pull requests (they come in issues endpoint too)
+                issues = [i for i in response.json() if 'pull_request' not in i]
+                return issues
+                
+        except Exception as e:
+            logger.error(f"Failed to list issues: {e}")
+            return []
+    
+    async def create_pull_request(self, title: str, body: str, head: str, base: str = "main") -> Dict[str, Any]:
+        """Create a pull request"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return {"error": "GitHub credentials not configured"}
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/pulls"
+            data = {
+                "title": title,
+                "body": body,
+                "head": head,
+                "base": base
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=self.headers, json=data)
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Failed to create pull request: {e}")
+            return {"error": str(e)}
+    
+    async def list_pull_requests(self, state: str = "open", limit: int = 10) -> List[Dict[str, Any]]:
+        """List pull requests in the repository"""
+        try:
+            if not all([self.token, self.owner, self.repo]):
+                return []
+            
+            url = f"{self.base_url}/repos/{self.owner}/{self.repo}/pulls"
+            params = {"state": state, "per_page": limit}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=self.headers, params=params)
+                response.raise_for_status()
+                return response.json()
+                
+        except Exception as e:
+            logger.error(f"Failed to list pull requests: {e}")
+            return []
     
     async def test_connection(self) -> bool:
         """Test if GitHub credentials are valid"""
