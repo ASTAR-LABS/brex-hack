@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { extractActions, executeAction, getActionStatus, type Action, type ActionStatus } from "@/lib/api";
+import { extractActions, getActionStatus, type Action, type ActionStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Loader2, CheckCircle, XCircle, PlayCircle, Clock } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Clock } from "lucide-react";
 
 export function ActionTracker() {
   const [text, setText] = useState("");
@@ -49,48 +49,28 @@ export function ActionTracker() {
       const result = await extractActions(text);
       setActions(result.actions);
       
-      // Initialize statuses for new actions
+      // Initialize statuses and start polling for all actions
       const newStatuses: Record<string, ActionStatus> = {};
+      const newPollingIds = new Set<string>();
+      
       for (const action of result.actions) {
         newStatuses[action.id] = {
           id: action.id,
           type: action.type,
           description: action.description,
-          state: 'extracted'
+          state: action.confidence > 0.8 ? 'queued' : 'extracted'
         };
+        
+        // Poll all actions to track their status
+        newPollingIds.add(action.id);
       }
+      
       setActionStatuses(newStatuses);
+      setPollingIds(newPollingIds);
     } catch (err) {
       console.error('Failed to extract actions:', err);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleExecute = async (actionId: string) => {
-    try {
-      // Start polling
-      setPollingIds(prev => new Set([...prev, actionId]));
-      
-      // Execute action
-      const status = await executeAction(actionId);
-      setActionStatuses(prev => ({ ...prev, [actionId]: status }));
-      
-      // If already resolved, stop polling
-      if (status.state === 'resolved' || status.state === 'failed') {
-        setPollingIds(prev => {
-          const newIds = new Set(prev);
-          newIds.delete(actionId);
-          return newIds;
-        });
-      }
-    } catch (err) {
-      console.error('Failed to execute action:', err);
-      setPollingIds(prev => {
-        const newIds = new Set(prev);
-        newIds.delete(actionId);
-        return newIds;
-      });
     }
   };
 
@@ -156,8 +136,7 @@ export function ActionTracker() {
           <h3 className="text-lg font-medium text-white mb-3">Extracted Actions</h3>
           {actions.map((action) => {
             const status = actionStatuses[action.id];
-            const isExecuting = status?.state === 'executing' || status?.state === 'queued';
-            const canExecute = status?.state === 'extracted';
+            const willAutoExecute = action.confidence > 0.8;
             
             return (
               <div
@@ -178,6 +157,9 @@ export function ActionTracker() {
                           {getStateIcon(status.state)}
                           <span>{status.state}</span>
                         </div>
+                      )}
+                      {willAutoExecute && status?.state === 'extracted' && (
+                        <span className="text-xs text-blue-400">• Auto-executing</span>
                       )}
                     </div>
                     <p className="text-white">{action.description}</p>
@@ -212,19 +194,13 @@ export function ActionTracker() {
                         {status.error}
                       </div>
                     )}
+                    
+                    {!willAutoExecute && status?.state === 'extracted' && (
+                      <div className="mt-2 text-xs text-gray-500">
+                        Low confidence - requires manual execution
+                      </div>
+                    )}
                   </div>
-                  
-                  {canExecute && (
-                    <Button
-                      onClick={() => handleExecute(action.id)}
-                      size="sm"
-                      variant="outline"
-                      className="ml-3"
-                    >
-                      <PlayCircle className="w-4 h-4 mr-1" />
-                      Execute
-                    </Button>
-                  )}
                 </div>
               </div>
             );
