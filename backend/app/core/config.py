@@ -30,11 +30,13 @@ class Settings(BaseSettings):
     # Audio Processing Settings
     audio_sample_rate: int = 16000
     audio_chunk_duration_ms: int = 30
-    audio_buffer_duration_ms: int = 1500
+    audio_buffer_duration_ms: int = 500  # Reduced from 1500ms for faster response
     vad_aggressiveness: int = 2
+    vad_enabled: bool = False  # Disable VAD for immediate processing
     
     # Session Settings
     session_timeout_minutes: int = 30
+    session_persistence_minutes: int = 10  # Keep paused sessions for 10 minutes
     
     # CORS Settings
     cors_origins: list = ["*"]

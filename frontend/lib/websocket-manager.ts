@@ -12,9 +12,14 @@ export interface TranscriptionData {
 }
 
 export interface SessionData {
-  type: 'session_started';
+  type: 'session_started' | 'session_resumed' | 'session_paused';
   session_id: string;
   timestamp: string;
+  is_resumed?: boolean;
+  transcript?: string[];
+  can_resume?: boolean;
+  resume_timeout_minutes?: number;
+  final_transcript?: string;
 }
 
 export interface WebSocketMessage {
@@ -38,8 +43,17 @@ class WebSocketManager {
   private maxReconnectAttempts = 5;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private queryClient: QueryClient | null = null;
+  private pausedSessionId: string | null = null;
 
-  private constructor() {}
+  private constructor() {
+    // Check for paused session in localStorage on initialization
+    if (typeof window !== 'undefined') {
+      const storedSessionId = localStorage.getItem('pausedSessionId');
+      if (storedSessionId) {
+        this.pausedSessionId = storedSessionId;
+      }
+    }
+  }
 
   static getInstance(): WebSocketManager {
     if (!WebSocketManager.instance) {
@@ -67,6 +81,20 @@ class WebSocketManager {
         console.log('WebSocket connected');
         this.updateStatus('connected');
         this.reconnectAttempts = 0;
+        
+        // Send init message with session_id if we have a paused session
+        if (this.pausedSessionId) {
+          this.send(JSON.stringify({
+            type: 'init',
+            session_id: this.pausedSessionId
+          }));
+        } else {
+          // Send init without session_id for new session
+          this.send(JSON.stringify({
+            type: 'init'
+          }));
+        }
+        
         resolve();
       };
 
@@ -75,20 +103,50 @@ class WebSocketManager {
         console.log('WebSocket message:', data);
         
         // Handle session start
-        if (data.type === 'session_started') {
+        if (data.type === 'session_started' || data.type === 'session_resumed') {
           this.sessionId = data.session_id;
+          this.pausedSessionId = null; // Clear paused session as it's now active
+          
           // Update query cache with session info
           this.queryClient?.setQueryData(['session'], {
             id: data.session_id,
             startedAt: data.timestamp,
-            status: 'active'
+            status: 'active',
+            isResumed: data.is_resumed || false
           });
+          
+          // If resumed, restore transcript
+          if (data.is_resumed && data.transcript) {
+            this.queryClient?.setQueryData(['transcription'], data.transcript);
+          }
         }
         
-        // Handle session end
+        // Handle session pause
+        if (data.type === 'session_paused') {
+          console.log('Session paused:', data.session_id);
+          this.pausedSessionId = data.session_id; // Store for resuming
+          this.sessionId = null;
+          
+          // Update query cache
+          this.queryClient?.setQueryData(['session'], {
+            id: data.session_id,
+            status: 'paused',
+            canResume: data.can_resume,
+            resumeTimeoutMinutes: data.resume_timeout_minutes
+          });
+          
+          // Store session ID in localStorage for persistence
+          if (data.can_resume) {
+            localStorage.setItem('pausedSessionId', data.session_id);
+          }
+        }
+        
+        // Handle session end (final removal)
         if (data.type === 'session_ended') {
           console.log('Session ended:', data.session_id);
           this.sessionId = null;
+          this.pausedSessionId = null;
+          localStorage.removeItem('pausedSessionId');
           // Update query cache
           this.queryClient?.setQueryData(['session'], null);
         }
@@ -181,6 +239,15 @@ class WebSocketManager {
 
   getSessionId(): string | null {
     return this.sessionId;
+  }
+  
+  getPausedSessionId(): string | null {
+    return this.pausedSessionId;
+  }
+  
+  clearPausedSession() {
+    this.pausedSessionId = null;
+    localStorage.removeItem('pausedSessionId');
   }
 
   isConnected(): boolean {
