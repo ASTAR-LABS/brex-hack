@@ -12,3 +12,5 @@ webrtcvad
 scipy
 langchain
 langchain-cerebras
+sqlalchemy
+aiosqlite

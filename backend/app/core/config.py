@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     cerebras_temperature: float = 0.7
     cerebras_max_tokens: int = 1024
     
+    # GitHub Integration
+    github_token: Optional[str] = os.getenv("GITHUB_TOKEN")
+    github_owner: Optional[str] = os.getenv("GITHUB_OWNER")
+    github_repo: Optional[str] = os.getenv("GITHUB_REPO")
+    
     # CORS Settings
     cors_origins: list = ["*"]
     cors_allow_credentials: bool = True
