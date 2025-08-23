@@ -69,15 +69,18 @@ class AgenticOrchestrator:
             self.tools.extend(native_tools)
 
             # Initialize the LLM
-            if settings.cerebras_api_key:
+            # Use OpenAI for tool calling (Cerebras has issues with tool format)
+            if os.getenv("OPENAI_API_KEY"):
+                llm = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    temperature=0.7,
+                )
+            elif settings.cerebras_api_key:
+                # Fallback to Cerebras if no OpenAI (but tools might not work)
+                logger.warning("Using Cerebras - tool calling may not work properly")
                 llm = ChatCerebras(
                     api_key=settings.cerebras_api_key,
                     model=settings.cerebras_model,
-                    temperature=0.7,
-                )
-            elif os.getenv("OPENAI_API_KEY"):
-                llm = ChatOpenAI(
-                    model="gpt-4o-mini",
                     temperature=0.7,
                 )
             else:
@@ -156,6 +159,12 @@ class AgenticOrchestrator:
                 When given a request, break it down into actionable steps and execute them using available tools.
                 Be proactive in checking for conflicts, gathering necessary information, and confirming success.
                 Always explain what you're doing and provide clear results."""
+                
+                # Add context about default GitHub repo if configured
+                if self.github_integration:
+                    system_prompt += f"\n\nDefault GitHub repository: {self.github_integration.owner}/{self.github_integration.repo}"
+                    system_prompt += "\nWhen asked to create issues or PRs without specifying a repo, use this default."
+                
                 messages.append(SystemMessage(content=system_prompt))
 
             # Add current request
