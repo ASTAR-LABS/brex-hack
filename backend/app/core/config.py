@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # Session Settings
     session_timeout_minutes: int = 30
     
+    # Cerebras Settings
+    cerebras_api_key: Optional[str] = os.getenv("CEREBRAS_API_KEY")
+    cerebras_model: str = "gpt-oss-120b"
+    cerebras_temperature: float = 0.7
+    cerebras_max_tokens: int = 1024
+    
     # CORS Settings
     cors_origins: list = ["*"]
     cors_allow_credentials: bool = True
