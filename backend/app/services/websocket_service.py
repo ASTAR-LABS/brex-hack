@@ -86,11 +86,17 @@ class WebSocketService:
                     audio_to_process = audio_processor.add_audio_chunk(audio_chunk)
                     
                     if audio_to_process:
-                        text, is_final = await self.whisper_client.transcribe_stream(
+                        # Pass session-specific context and get updated context back
+                        text, is_final, updated_context = await self.whisper_client.transcribe_stream(
                             audio_to_process,
                             sample_rate=16000,
-                            language="en"
+                            language="en",
+                            context_words=session.word_history
                         )
+                        
+                        # Update session's context with the new words
+                        if is_final and updated_context:
+                            session.word_history = updated_context
                         
                         if text:
                             session.add_to_transcript(text, is_final)

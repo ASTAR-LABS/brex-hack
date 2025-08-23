@@ -1,7 +1,6 @@
 from pywhispercpp.model import Model
 import asyncio
 from typing import Tuple, Optional, List
-from collections import deque
 import tempfile
 import wave
 import os
@@ -12,9 +11,7 @@ logger = logging.getLogger(__name__)
 class WhisperClient:
     def __init__(self, model_size: str = "base", n_threads: int = 6):
         self.model = Model(model_size, n_threads=n_threads)
-        self.previous_text = ""
-        self.overlap_duration = 0.5
-        self.context_buffer = deque(maxlen=5)  # Efficient O(1) operations with automatic size limit
+        # Removed instance-level state to make WhisperClient stateless and thread-safe
     
     async def transcribe(self, audio_path: str, language: str = "en") -> str:
         segments = await asyncio.to_thread(
@@ -31,8 +28,9 @@ class WhisperClient:
         audio_data: bytes, 
         sample_rate: int = 16000,
         language: str = "en",
+        context_words: Optional[List[str]] = None,
         return_timestamps: bool = False
-    ) -> Tuple[str, bool]:
+    ) -> Tuple[str, bool, List[str]]:
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                 with wave.open(tmp_file.name, 'wb') as wav_file:
@@ -41,9 +39,14 @@ class WhisperClient:
                     wav_file.setframerate(sample_rate)
                     wav_file.writeframes(audio_data)
                 
-                # Use context from previous segments for better accuracy
-                # Convert last 3 items from deque to list for joining
-                initial_prompt = " ".join(list(self.context_buffer)[-3:]) if self.context_buffer else ""
+                # Use provided context words (last 100 words max to stay under 224 token limit)
+                # Initialize context if not provided
+                if context_words is None:
+                    context_words = []
+                
+                # Take last 100 words to ensure we stay under 224 token limit
+                context_words = context_words[-100:] if len(context_words) > 100 else context_words
+                initial_prompt = " ".join(context_words) if context_words else ""
                 
                 segments = await asyncio.to_thread(
                     self.model.transcribe,
@@ -57,23 +60,25 @@ class WhisperClient:
                 os.unlink(tmp_file.name)
                 
                 if not segments:
-                    return "", False
+                    return "", False, context_words
                 
                 full_text = " ".join([segment.text.strip() for segment in segments])
                 
                 is_final = self._is_sentence_complete(full_text)
                 
-                if is_final and full_text != self.previous_text:
-                    self.previous_text = full_text
-                    # Add to context buffer (deque automatically maintains size limit)
-                    self.context_buffer.append(full_text)
-                    return full_text, True
-                else:
-                    return full_text, False
+                # Update context with new words if we have final text
+                updated_context = list(context_words)  # Create a copy
+                if is_final and full_text.strip():
+                    new_words = full_text.split()
+                    updated_context.extend(new_words)
+                    # Keep only last 100 words
+                    updated_context = updated_context[-100:]
+                
+                return full_text, is_final, updated_context
                     
         except Exception as e:
             logger.error(f"Error in stream transcription: {e}")
-            return "", False
+            return "", False, context_words if context_words else []
     
     def _is_sentence_complete(self, text: str) -> bool:
         if not text:
