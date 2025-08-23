@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     session_timeout_minutes: int = 30
     session_persistence_minutes: int = 10  # Keep paused sessions for 10 minutes
     
+    # Cerebras Settings
+    cerebras_api_key: Optional[str] = os.getenv("CEREBRAS_API_KEY")
+    cerebras_model: str = "gpt-oss-120b"
+    cerebras_temperature: float = 0.7
+    cerebras_max_tokens: int = 1024
+    
+    # GitHub Integration
+    github_token: Optional[str] = os.getenv("GITHUB_TOKEN")
+    github_owner: Optional[str] = os.getenv("GITHUB_OWNER")
+    github_repo: Optional[str] = os.getenv("GITHUB_REPO")
+    
     # CORS Settings
     cors_origins: list = ["*"]
     cors_allow_credentials: bool = True

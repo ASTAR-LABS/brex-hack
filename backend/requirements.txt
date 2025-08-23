@@ -10,3 +10,7 @@ websockets
 numpy
 webrtcvad
 scipy
+langchain
+langchain-cerebras
+sqlalchemy
+aiosqlite
