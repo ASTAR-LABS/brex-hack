@@ -22,7 +22,8 @@ from .calendar import (
     create_calendar_event,
     check_calendar_availability,
     get_upcoming_events,
-    cancel_calendar_event
+    cancel_calendar_event,
+    authenticate_google_calendar
 )
 
 from .utility import (
@@ -56,7 +57,8 @@ CALENDAR_TOOLS = [
     create_calendar_event,
     check_calendar_availability,
     get_upcoming_events,
-    cancel_calendar_event
+    cancel_calendar_event,
+    authenticate_google_calendar
 ]
 
 UTILITY_TOOLS = [
