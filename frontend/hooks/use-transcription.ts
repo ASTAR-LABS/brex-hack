@@ -10,6 +10,12 @@ interface UseTranscriptionOptions {
   onError?: (error: Error) => void;
 }
 
+interface Session {
+  id: string;
+  startedAt: string;
+  status: string;
+}
+
 export function useTranscription(options: UseTranscriptionOptions = {}) {
   const queryClient = useQueryClient();
   const [isRecording, setIsRecording] = useState(false);
@@ -44,7 +50,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   });
 
   // Query for session data
-  const { data: session } = useQuery({
+  const { data: session } = useQuery<Session | null>({
     queryKey: ['session'],
     queryFn: () => null,
     staleTime: Infinity,
@@ -84,9 +90,9 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   // Listen to WebSocket messages
   useEffect(() => {
     const unsubscribe = websocketManager.addMessageListener((message: WebSocketMessage) => {
-      if (message.type === 'session_started') {
+      if (message.type === 'session_started' && message.session_id) {
         options.onSessionStart?.(message.session_id);
-      } else if (message.type === 'transcription' && message.is_final) {
+      } else if (message.type === 'transcription' && message.is_final && message.text) {
         options.onTranscription?.(message.text);
       }
     });
@@ -149,7 +155,13 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 
       // Set up audio context with 16kHz sample rate for recording
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
+      try {
+        audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
+      } catch (e) {
+        // Fallback if 16kHz is not supported
+        console.warn('16kHz sample rate not supported, using default:', e);
+        audioContextRef.current = new AudioContextClass();
+      }
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
       processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
@@ -190,6 +202,11 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 
   // Stop recording
   const stopRecording = useCallback(() => {
+    // Send stop command to backend
+    if (websocketManager.isConnected()) {
+      websocketManager.sendCommand('stop_recording');
+    }
+    
     // Stop recording stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -230,6 +247,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
         disconnectMutation.mutate();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {

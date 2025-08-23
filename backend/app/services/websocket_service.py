@@ -1,4 +1,5 @@
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketState
 from app.services.session_service import SessionManager
 from app.services.audio_service import AudioProcessor
 from app.clients.whisper_client import WhisperClient
@@ -44,7 +45,9 @@ class WebSocketService:
                 
                 if "text" in message:
                     data = json.loads(message["text"])
-                    await self._handle_control_message(session, data)
+                    should_stop = await self._handle_control_message(session, data)
+                    if should_stop:
+                        break  # Exit the loop to end the session
                     
                 elif "bytes" in message:
                     audio_chunk = message["bytes"]
@@ -89,14 +92,14 @@ class WebSocketService:
             logger.error(f"Error in WebSocket handler: {e}")
             # Only try to send error if websocket is still open
             try:
-                if websocket.client_state.value == 1:  # WebSocketState.CONNECTED
+                if websocket.client_state == WebSocketState.CONNECTED:
                     await websocket.send_json({
                         "type": "error",
                         "message": str(e),
                         "timestamp": datetime.now().isoformat()
                     })
-            except:
-                pass
+            except Exception as send_error:
+                logger.debug(f"Could not send error message: {send_error}")
         finally:
             transcript = session.get_full_text()
             if transcript:
@@ -106,13 +109,23 @@ class WebSocketService:
             
             try:
                 await websocket.close()
-            except:
-                pass
+            except Exception as send_error:
+                logger.debug(f"Could not send error message: {send_error}")
     
     async def _handle_control_message(self, session, data: dict):
         command = data.get("command")
         
-        if command == "get_transcript":
+        if command == "stop_recording":
+            logger.info(f"Stopping recording for session {session.session_id}")
+            await session.websocket.send_json({
+                "type": "session_ended",
+                "session_id": session.session_id,
+                "timestamp": datetime.now().isoformat(),
+                "final_transcript": session.get_full_text()
+            })
+            return True  # Signal to end the session
+        
+        elif command == "get_transcript":
             await session.websocket.send_json({
                 "type": "transcript",
                 "full_transcript": session.full_transcript,
@@ -133,3 +146,5 @@ class WebSocketService:
                 "type": "session_info",
                 "data": session.to_dict()
             })
+        
+        return False  # Don't stop the session for other commands

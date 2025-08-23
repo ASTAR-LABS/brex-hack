@@ -19,7 +19,12 @@ export interface SessionData {
 
 export interface WebSocketMessage {
   type: string;
-  [key: string]: any;
+  session_id?: string;
+  text?: string;
+  is_final?: boolean;
+  timestamp?: string;
+  full_transcript?: string;
+  [key: string]: unknown;
 }
 
 class WebSocketManager {
@@ -55,7 +60,8 @@ class WebSocketManager {
       }
 
       this.updateStatus('connecting');
-      this.websocket = new WebSocket('ws://localhost:8000/api/v1/ws/audio');
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/api/v1/ws/audio';
+      this.websocket = new WebSocket(wsUrl);
 
       this.websocket.onopen = () => {
         console.log('WebSocket connected');
@@ -77,6 +83,14 @@ class WebSocketManager {
             startedAt: data.timestamp,
             status: 'active'
           });
+        }
+        
+        // Handle session end
+        if (data.type === 'session_ended') {
+          console.log('Session ended:', data.session_id);
+          this.sessionId = null;
+          // Update query cache
+          this.queryClient?.setQueryData(['session'], null);
         }
         
         // Handle transcription
@@ -134,19 +148,23 @@ class WebSocketManager {
     }
   }
 
-  sendCommand(command: string, payload?: any) {
+  sendCommand(command: string, payload?: Record<string, unknown>) {
     this.send(JSON.stringify({ command, ...payload }));
   }
 
   addMessageListener(listener: (message: WebSocketMessage) => void) {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   addStatusListener(listener: (status: WebSocketStatus) => void) {
     this.statusListeners.add(listener);
     listener(this.status); // Send current status immediately
-    return () => this.statusListeners.delete(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
   }
 
   private updateStatus(status: WebSocketStatus) {
