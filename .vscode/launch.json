@@ -1,0 +1,78 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: FastAPI Backend",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--reload",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000"
+            ],
+            "jinja": true,
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "envFile": "${workspaceFolder}/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/backend"
+        },
+        {
+            "name": "Python: Backend run.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/run.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "envFile": "${workspaceFolder}/backend/.env",
+            "cwd": "${workspaceFolder}/backend"
+        },
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: FastAPI with Debugpy",
+            "type": "python",
+            "request": "launch",
+            "module": "debugpy",
+            "args": [
+                "--listen",
+                "5678",
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--reload",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000"
+            ],
+            "jinja": true,
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "envFile": "${workspaceFolder}/backend/.env",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/backend"
+        }
+    ]
+}
