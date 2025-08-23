@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { Mic, MicOff } from "lucide-react";
+import { IntegrationsModal } from "@/components/IntegrationsModal";
 
 export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
@@ -109,6 +110,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
+      <IntegrationsModal />
       {/* Title when not recording */}
       {!isRecording && transcription.length === 0 && (
         <div className="mb-16 text-center animate-fade-in">
