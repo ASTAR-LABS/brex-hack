@@ -154,35 +154,64 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       }
 
       // Set up audio context with 16kHz sample rate for recording
+      // Note: Whisper expects 16kHz. If browser doesn't support it, we use default
+      // and the backend will handle resampling if needed
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       try {
         audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
       } catch (e) {
-        // Fallback if 16kHz is not supported
-        console.warn('16kHz sample rate not supported, using default:', e);
+        // Fallback if 16kHz is not supported (typically 48kHz on most browsers)
+        // Backend's AudioProcessor can resample if needed via resample_if_needed()
+        console.warn('16kHz sample rate not supported, using browser default. Backend will handle resampling.');
         audioContextRef.current = new AudioContextClass();
       }
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
-      processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-
-      processorRef.current.onaudioprocess = (e) => {
-        if (!websocketManager.isConnected()) return;
-
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcmData = new Int16Array(inputData.length);
-
-        // Convert Float32 to Int16 (PCM)
-        for (let i = 0; i < inputData.length; i++) {
-          pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+      
+      // Try to use AudioWorklet if available (better performance)
+      let audioWorkletInitialized = false;
+      if ('audioWorklet' in audioContextRef.current) {
+        try {
+          await audioContextRef.current.audioWorklet.addModule('/audio-processor.worklet.js');
+          const workletNode = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
+          
+          workletNode.port.onmessage = (event) => {
+            if (event.data.audio && websocketManager.isConnected()) {
+              websocketManager.send(event.data.audio);
+            }
+          };
+          
+          source.connect(workletNode);
+          audioWorkletInitialized = true;
+          console.log('Using AudioWorklet for audio processing');
+        } catch (e) {
+          console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
         }
+      }
+      
+      // Fallback to ScriptProcessor if AudioWorklet not available or failed
+      if (!audioWorkletInitialized) {
+        processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
 
-        // Send audio data
-        websocketManager.send(pcmData.buffer);
-      };
+        processorRef.current.onaudioprocess = (e) => {
+          if (!websocketManager.isConnected()) return;
 
-      source.connect(processorRef.current);
-      processorRef.current.connect(audioContextRef.current.destination);
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcmData = new Int16Array(inputData.length);
+
+          // Convert Float32 to Int16 (PCM)
+          for (let i = 0; i < inputData.length; i++) {
+            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+          }
+
+          // Send audio data
+          websocketManager.send(pcmData.buffer);
+        };
+
+        source.connect(processorRef.current);
+        processorRef.current.connect(audioContextRef.current.destination);
+        console.log('Using ScriptProcessor for audio processing');
+      }
       
       // Set up visualization context (separate from recording)
       visualizationContextRef.current = new AudioContextClass();
