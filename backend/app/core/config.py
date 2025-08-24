@@ -51,41 +51,54 @@ class Settings(BaseSettings):
     github_token: Optional[str] = os.getenv("GITHUB_TOKEN")
     github_owner: Optional[str] = os.getenv("GITHUB_OWNER")
     github_repo: Optional[str] = os.getenv("GITHUB_REPO")
-    
+
     # Agentic Mode
     use_agentic_mode: bool = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
-    
+
     # MCP Server Configuration
     # GitHub MCP
     enable_github_mcp: bool = os.getenv("ENABLE_GITHUB_MCP", "false").lower() == "true"
-    
+
     # Google Calendar MCP
-    enable_google_calendar_mcp: bool = os.getenv("ENABLE_GOOGLE_CALENDAR_MCP", "false").lower() == "true"
+    enable_google_calendar_mcp: bool = (
+        os.getenv("ENABLE_GOOGLE_CALENDAR_MCP", "false").lower() == "true"
+    )
     google_client_id: Optional[str] = os.getenv("GOOGLE_CLIENT_ID")
     google_client_secret: Optional[str] = os.getenv("GOOGLE_CLIENT_SECRET")
-    google_redirect_uri: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback")
-    
+    google_redirect_uri: str = os.getenv(
+        "GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/callback"
+    )
+
     # Slack MCP
     enable_slack_mcp: bool = os.getenv("ENABLE_SLACK_MCP", "false").lower() == "true"
-    slack_bot_token: Optional[str] = os.getenv("SLACK_BOT_TOKEN")
-    slack_app_token: Optional[str] = os.getenv("SLACK_APP_TOKEN")
+    # slack_bot_token: Optional[str] = os.getenv("SLACK_BOT_TOKEN")
+    # slack_app_token: Optional[str] = os.getenv("SLACK_APP_TOKEN")
+    # slack_default_channel: str = os.getenv("SLACK_DEFAULT_CHANNEL", "general")
+    slack_mcp_xoxc_token: Optional[str] = os.getenv("SLACK_MCP_XOXC_TOKEN")
+    slack_mcp_xoxd_token: Optional[str] = os.getenv("SLACK_MCP_XOXD_TOKEN")
     slack_default_channel: str = os.getenv("SLACK_DEFAULT_CHANNEL", "general")
-    
+
     # Other MCPs (for future use)
-    enable_filesystem_mcp: bool = os.getenv("ENABLE_FILESYSTEM_MCP", "false").lower() == "true"
+    enable_filesystem_mcp: bool = (
+        os.getenv("ENABLE_FILESYSTEM_MCP", "false").lower() == "true"
+    )
     filesystem_root: str = os.getenv("FILESYSTEM_ROOT", "/tmp")
-    
-    enable_postgres_mcp: bool = os.getenv("ENABLE_POSTGRES_MCP", "false").lower() == "true"
+
+    enable_postgres_mcp: bool = (
+        os.getenv("ENABLE_POSTGRES_MCP", "false").lower() == "true"
+    )
     postgres_connection_string: Optional[str] = os.getenv("POSTGRES_CONNECTION_STRING")
-    
+
     enable_notion_mcp: bool = os.getenv("ENABLE_NOTION_MCP", "false").lower() == "true"
     notion_api_key: Optional[str] = os.getenv("NOTION_API_KEY")
-    
-    enable_google_drive_mcp: bool = os.getenv("ENABLE_GOOGLE_DRIVE_MCP", "false").lower() == "true"
-    
+
+    enable_google_drive_mcp: bool = (
+        os.getenv("ENABLE_GOOGLE_DRIVE_MCP", "false").lower() == "true"
+    )
+
     enable_linear_mcp: bool = os.getenv("ENABLE_LINEAR_MCP", "false").lower() == "true"
     linear_api_key: Optional[str] = os.getenv("LINEAR_API_KEY")
-    
+
     enable_jira_mcp: bool = os.getenv("ENABLE_JIRA_MCP", "false").lower() == "true"
     jira_url: Optional[str] = os.getenv("JIRA_URL")
     jira_email: Optional[str] = os.getenv("JIRA_EMAIL")

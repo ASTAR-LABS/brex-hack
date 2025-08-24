@@ -1,120 +1,142 @@
 from langchain_core.tools import tool, ToolException
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import os
 import httpx
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Slack configuration from environment
-SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
+# Slack configuration from environment - using bot token
+SLACK_BOT_TOKEN = os.getenv("SLACK_MCP_XOXB_TOKEN", "")
 SLACK_DEFAULT_CHANNEL = os.getenv("SLACK_DEFAULT_CHANNEL", "general")
+
+
+# Helper functions for Slack API calls
+def _get_slack_headers() -> Dict[str, str]:
+    """Get headers for Slack API requests with bot token."""
+    if not SLACK_BOT_TOKEN:
+        raise ToolException("Slack bot token not configured")
+
+    return {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+
+async def _slack_api_call(
+    client: httpx.AsyncClient, method: str, url: str, **kwargs
+) -> Dict[str, Any]:
+    """Make a Slack API call and handle common errors."""
+    headers = _get_slack_headers()
+
+    if method.upper() == "GET":
+        response = await client.get(url, headers=headers, **kwargs)
+    elif method.upper() == "POST":
+        response = await client.post(url, headers=headers, **kwargs)
+    else:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+
+    result = response.json()
+
+    if not result.get("ok"):
+        error_msg = result.get("error", "Unknown error")
+        raise ToolException(f"Slack API error: {error_msg}")
+
+    return result
+
+
+def _format_channel(channel: str) -> str:
+    """Ensure channel has proper format."""
+    if not channel.startswith("C") and not channel.startswith("#"):
+        return f"#{channel}"
+    return channel
 
 
 @tool
 async def send_slack_message(channel: str, message: str) -> str:
     """Send a message to a Slack channel.
-    
+
     Args:
         channel: Channel name (without #) or channel ID
         message: Message text to send
-    
+
     Returns:
         Success message with timestamp
     """
-    if not SLACK_BOT_TOKEN:
-        raise ToolException("Slack bot token not configured")
-    
     try:
-        # Ensure channel has # prefix if it's a channel name
-        if not channel.startswith("C") and not channel.startswith("#"):
-            channel = f"#{channel}"
-        
-        url = "https://slack.com/api/chat.postMessage"
-        headers = {
-            "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "channel": channel,
-            "text": message
-        }
-        
+        channel = _format_channel(channel)
+
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, json=data)
-            result = response.json()
-            
-            if not result.get("ok"):
-                raise ToolException(f"Slack API error: {result.get('error', 'Unknown error')}")
-            
+            await _slack_api_call(
+                client,
+                "POST",
+                "https://slack.com/api/chat.postMessage",
+                json={"channel": channel, "text": message},
+            )
+
             return f"✅ Message sent to {channel}"
+    except ToolException:
+        raise
     except Exception as e:
         raise ToolException(f"Error sending Slack message: {str(e)}")
 
 
 @tool
-async def send_slack_dm(user_email: str, message: str) -> str:
+async def send_slack_dm(user_name: str, message: str) -> str:
     """Send a direct message to a Slack user.
-    
+
     Args:
-        user_email: Email address of the user
+        user_name: Username or display name of the user (e.g., "Erik", "John Doe")
         message: Message text to send
-    
+
     Returns:
         Success message
     """
-    if not SLACK_BOT_TOKEN:
-        raise ToolException("Slack bot token not configured")
-    
     try:
-        # First, find user by email
-        lookup_url = "https://slack.com/api/users.lookupByEmail"
-        headers = {
-            "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        
         async with httpx.AsyncClient() as client:
-            # Find user
-            response = await client.get(
-                lookup_url,
-                headers=headers,
-                params={"email": user_email}
+            # Get list of users
+            result = await _slack_api_call(
+                client, "GET", "https://slack.com/api/users.list"
             )
-            result = response.json()
-            
-            if not result.get("ok"):
-                raise ToolException(f"Could not find user with email {user_email}")
-            
-            user_id = result["user"]["id"]
-            
+
+            # Find user by name (case insensitive)
+            user_id = None
+            user_name_lower = user_name.lower()
+            for member in result.get("members", []):
+                real_name = member.get("real_name", "").lower()
+                display_name = member.get("profile", {}).get("display_name", "").lower()
+                name = member.get("name", "").lower()
+
+                if (
+                    user_name_lower in [real_name, display_name, name]
+                    or user_name_lower in real_name
+                    or user_name_lower in display_name
+                ):
+                    user_id = member["id"]
+                    break
+
+            if not user_id:
+                raise ToolException(f"Could not find user with name '{user_name}'")
+
             # Open conversation
-            conv_url = "https://slack.com/api/conversations.open"
-            conv_response = await client.post(
-                conv_url,
-                headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-                json={"users": user_id}
+            conv_result = await _slack_api_call(
+                client,
+                "POST",
+                "https://slack.com/api/conversations.open",
+                json={"users": user_id},
             )
-            conv_result = conv_response.json()
-            
-            if not conv_result.get("ok"):
-                raise ToolException(f"Could not open DM with user")
-            
+
             channel_id = conv_result["channel"]["id"]
-            
+
             # Send message
-            msg_url = "https://slack.com/api/chat.postMessage"
-            msg_response = await client.post(
-                msg_url,
-                headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-                json={"channel": channel_id, "text": message}
+            await _slack_api_call(
+                client,
+                "POST",
+                "https://slack.com/api/chat.postMessage",
+                json={"channel": channel_id, "text": message},
             )
-            msg_result = msg_response.json()
-            
-            if not msg_result.get("ok"):
-                raise ToolException(f"Failed to send DM: {msg_result.get('error')}")
-            
-            return f"✅ DM sent to {user_email}"
+
+            return f"✅ DM sent to {user_name}"
     except ToolException:
         raise
     except Exception as e:
@@ -122,23 +144,46 @@ async def send_slack_dm(user_email: str, message: str) -> str:
 
 
 @tool
-async def create_slack_reminder(user_email: str, reminder_text: str, time: str) -> str:
-    """Create a Slack reminder for a user.
-    
+async def search_slack_messages(query: str, limit: int = 10) -> str:
+    """Search for messages in Slack.
+
     Args:
-        user_email: Email of the user to remind
-        reminder_text: Text of the reminder
-        time: When to send reminder (e.g., "in 30 minutes", "tomorrow at 2pm", "every Monday at 9am")
-    
+        query: Search query text
+        limit: Maximum number of results to return (default: 10)
+
     Returns:
-        Success message
+        Formatted search results
     """
-    if not SLACK_BOT_TOKEN:
-        raise ToolException("Slack bot token not configured")
-    
     try:
-        # This would use Slack's reminders.add API
-        # For now, return a placeholder
-        return f"✅ Reminder set for {user_email}: '{reminder_text}' at {time}"
+        async with httpx.AsyncClient() as client:
+            result = await _slack_api_call(
+                client,
+                "GET",
+                "https://slack.com/api/search.messages",
+                params={
+                    "query": query,
+                    "count": limit,
+                    "sort": "timestamp",
+                    "sort_dir": "desc",
+                },
+            )
+
+            messages = result.get("messages", {}).get("matches", [])
+
+            if not messages:
+                return f"No messages found matching '{query}'"
+
+            output = f"Found {len(messages)} messages matching '{query}':\n\n"
+            for msg in messages[:limit]:
+                user = msg.get("username", "Unknown")
+                text = msg.get("text", "")
+                channel = msg.get("channel", {}).get("name", "Unknown")
+
+                output += f"• [{channel}] @{user}: {text[:100]}{'...' if len(text) > 100 else ''}\n"
+
+            return output
+
+    except ToolException:
+        raise
     except Exception as e:
-        raise ToolException(f"Error creating reminder: {str(e)}")
+        raise ToolException(f"Error searching Slack: {str(e)}")

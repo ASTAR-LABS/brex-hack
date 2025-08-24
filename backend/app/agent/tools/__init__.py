@@ -15,7 +15,7 @@ from .github import (
 from .slack import (
     send_slack_message,
     send_slack_dm,
-    create_slack_reminder
+    search_slack_messages
 )
 
 from .calendar import (
@@ -50,7 +50,7 @@ GITHUB_TOOLS = [
 SLACK_TOOLS = [
     send_slack_message,
     send_slack_dm,
-    create_slack_reminder
+    search_slack_messages
 ]
 
 CALENDAR_TOOLS = [
