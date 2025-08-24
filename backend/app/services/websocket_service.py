@@ -1,8 +1,7 @@
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
 from app.services.session_service import SessionManager
-from app.services.audio_service import AudioProcessor
-from app.clients.whisper_client import WhisperClient
+from app.clients.azure_transcribe_client import AzureTranscribeClient
 import httpx
 import os
 # GitHub integration is now handled through the agent
@@ -21,7 +20,11 @@ class WebSocketService:
         from app.core.config import settings
 
         self.session_manager = SessionManager()
-        self.whisper_client = WhisperClient(model_size=settings.whisper_model_size)
+        self.transcribe_client = AzureTranscribeClient(
+            api_key=settings.azure_transcribe_key,
+            endpoint=settings.azure_transcribe_endpoint,
+            deployment_name=settings.azure_transcribe_deployment
+        )
         self.agent_base_url = os.getenv("API_URL", "http://localhost:8000")
 
     async def start(self):
@@ -66,14 +69,6 @@ class WebSocketService:
 
         from app.core.config import settings
 
-        audio_processor = AudioProcessor(
-            sample_rate=settings.audio_sample_rate,
-            chunk_duration_ms=settings.audio_chunk_duration_ms,
-            buffer_duration_ms=settings.audio_buffer_duration_ms,
-            vad_aggressiveness=settings.vad_aggressiveness,
-            vad_enabled=settings.vad_enabled,
-        )
-
         await websocket.send_json(
             {
                 "type": "session_started" if not is_resumed else "session_resumed",
@@ -95,54 +90,45 @@ class WebSocketService:
                         break  # Exit the loop to end the session
 
                 elif "bytes" in message:
-                    audio_chunk = message["bytes"]
-                    session.audio_buffer.extend(audio_chunk)
-
-                    audio_to_process = audio_processor.add_audio_chunk(audio_chunk)
-
-                    if audio_to_process:
-                        # Pass session-specific context and get updated context back
-                        text, is_final, updated_context = (
-                            await self.whisper_client.transcribe_stream(
-                                audio_to_process,
-                                sample_rate=16000,
-                                language="en",
-                                context_words=session.word_history,
-                            )
+                    # Receive complete 15-second audio buffer from frontend
+                    audio_data = message["bytes"]
+                    
+                    # Transcribe the audio using Azure gpt-4o-transcribe
+                    result = await self.transcribe_client.transcribe_audio(
+                        audio_data,
+                        sample_rate=16000
+                    )
+                    
+                    text = result.get("text", "")
+                    error = result.get("error", "")
+                    
+                    if error:
+                        logger.error(f"Transcription error: {error}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Transcription failed: {error}",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    elif text:
+                        # Add to session transcript
+                        session.add_to_transcript(text, is_final=True)
+                        
+                        # Send transcription to frontend
+                        response = {
+                            "type": "transcription",
+                            "text": text,
+                            "is_final": True,
+                            "session_id": session.session_id,
+                            "timestamp": datetime.now().isoformat(),
+                            "full_transcript": session.get_full_text(),
+                        }
+                        await websocket.send_json(response)
+                        
+                        # Process with agent
+                        await self._extract_and_execute_actions(
+                            text, session, websocket
                         )
-
-                        # Update session's context with the new words
-                        if is_final and updated_context:
-                            session.word_history = updated_context
-
-                        if text:
-                            session.add_to_transcript(text, is_final)
-
-                            response = {
-                                "type": "transcription",
-                                "text": text,
-                                "is_final": is_final,
-                                "session_id": session.session_id,
-                                "timestamp": datetime.now().isoformat(),
-                                "full_transcript": session.get_full_text(),
-                            }
-
-                            await websocket.send_json(response)
-
-                            if is_final:
-                                await websocket.send_json(
-                                    {
-                                        "type": "sentence_complete",
-                                        "sentence": text,
-                                        "total_sentences": len(session.full_transcript),
-                                        "timestamp": datetime.now().isoformat(),
-                                    }
-                                )
-
-                                # Extract and execute actions from the final text
-                                await self._extract_and_execute_actions(
-                                    text, session, websocket
-                                )
+                    
                     session.update_activity()
 
         except WebSocketDisconnect:

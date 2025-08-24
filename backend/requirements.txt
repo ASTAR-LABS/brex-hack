@@ -1,14 +1,12 @@
 fastapi
 uvicorn
 python-multipart
-pywhispercpp
 openai
 python-dotenv
 pydantic
 pydantic-settings
 websockets
 numpy
-webrtcvad
 scipy
 langchain
 langchain-cerebras

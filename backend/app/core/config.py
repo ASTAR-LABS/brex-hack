@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     port: int = 8000
     reload: bool = True
 
-    # Azure OpenAI Settings
+    # Azure OpenAI Settings (for agent)
     azure_openai_api_key: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
     azure_openai_endpoint: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
@@ -25,17 +25,16 @@ class Settings(BaseSettings):
         "AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4"
     )
 
-    # Whisper Settings
-    whisper_model_size: str = "small"  # Upgraded from "base" for better accuracy
-    whisper_device: str = "cpu"
-    whisper_compute_type: str = "int8"
+    # Azure Transcription Settings (gpt-4o-transcribe)
+    azure_transcribe_endpoint: Optional[str] = os.getenv("AZURE_TRANSCRIBE_ENDPOINT")
+    azure_transcribe_key: Optional[str] = os.getenv("AZURE_TRANSCRIBE_KEY")
+    azure_transcribe_deployment: str = os.getenv(
+        "AZURE_TRANSCRIBE_DEPLOYMENT", "gpt-4o-transcribe"
+    )
 
     # Audio Processing Settings
     audio_sample_rate: int = 16000
-    audio_chunk_duration_ms: int = 30
-    audio_buffer_duration_ms: int = 3500  # Increased from 1500ms for better context
-    vad_aggressiveness: int = 1  # Reduced from 2 - less aggressive filtering
-    vad_enabled: bool = True  # Enable VAD to filter out non-speech audio
+    audio_buffer_duration_seconds: int = 15  # Buffer 15 seconds of audio on frontend
 
     # Session Settings
     session_timeout_minutes: int = 30

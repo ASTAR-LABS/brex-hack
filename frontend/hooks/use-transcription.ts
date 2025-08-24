@@ -20,6 +20,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   const queryClient = useQueryClient();
   const [isRecording, setIsRecording] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>(new Array(40).fill(0));
+  const [localTranscriptBuffer, setLocalTranscriptBuffer] = useState<string[]>([]);
   
   // Audio references
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -29,6 +30,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   const animationFrameRef = useRef<number | null>(null);
   const visualizationContextRef = useRef<AudioContext | null>(null);
   const visualizationStreamRef = useRef<MediaStream | null>(null);
+  const audioBufferRef = useRef<Float32Array[]>([]);
+  const bufferTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize WebSocket manager with query client
   useEffect(() => {
@@ -93,6 +96,8 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       if ((message.type === 'session_started' || message.type === 'session_resumed') && message.session_id) {
         options.onSessionStart?.(message.session_id);
       } else if (message.type === 'transcription' && message.is_final && message.text) {
+        // Add to local transcript buffer
+        setLocalTranscriptBuffer(prev => [...prev, message.text]);
         options.onTranscription?.(message.text);
       }
     });
@@ -140,6 +145,71 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     draw();
   }, []);
 
+  // Helper function to convert Float32Array to WAV format
+  const convertToWav = (audioData: Float32Array[], sampleRate: number): ArrayBuffer => {
+    // Concatenate all audio chunks
+    const totalLength = audioData.reduce((acc, chunk) => acc + chunk.length, 0);
+    const fullAudio = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of audioData) {
+      fullAudio.set(chunk, offset);
+      offset += chunk.length;
+    }
+    
+    // Convert to 16-bit PCM
+    const pcmData = new Int16Array(fullAudio.length);
+    for (let i = 0; i < fullAudio.length; i++) {
+      pcmData[i] = Math.max(-32768, Math.min(32767, fullAudio[i] * 32768));
+    }
+    
+    // Create WAV header
+    const wavBuffer = new ArrayBuffer(44 + pcmData.length * 2);
+    const view = new DataView(wavBuffer);
+    
+    // "RIFF" chunk descriptor
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + pcmData.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // PCM
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true); // Byte rate
+    view.setUint16(32, 2, true); // Block align
+    view.setUint16(34, 16, true); // Bits per sample
+    writeString(36, 'data');
+    view.setUint32(40, pcmData.length * 2, true);
+    
+    // Write PCM data
+    const dataView = new Int16Array(wavBuffer, 44);
+    dataView.set(pcmData);
+    
+    return wavBuffer;
+  };
+  
+  // Send buffered audio to server
+  const sendBufferedAudio = useCallback(async () => {
+    if (audioBufferRef.current.length === 0) return;
+    
+    const sampleRate = audioContextRef.current?.sampleRate || 16000;
+    const wavData = convertToWav(audioBufferRef.current, sampleRate);
+    
+    // Clear the buffer
+    audioBufferRef.current = [];
+    
+    // Send WAV data to server
+    if (websocketManager.isConnected()) {
+      websocketManager.send(wavData);
+    }
+  }, []);
+  
   // Start recording
   const startRecording = useCallback(async () => {
     try {
@@ -154,64 +224,34 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       }
 
       // Set up audio context with 16kHz sample rate for recording
-      // Note: Whisper expects 16kHz. If browser doesn't support it, we use default
-      // and the backend will handle resampling if needed
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       try {
         audioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
       } catch (e) {
-        // Fallback if 16kHz is not supported (typically 48kHz on most browsers)
-        // Backend's AudioProcessor can resample if needed via resample_if_needed()
-        console.warn('16kHz sample rate not supported, using browser default. Backend will handle resampling.');
+        console.warn('16kHz sample rate not supported, using browser default.');
         audioContextRef.current = new AudioContextClass();
       }
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
       
-      // Try to use AudioWorklet if available (better performance)
-      let audioWorkletInitialized = false;
-      if ('audioWorklet' in audioContextRef.current) {
-        try {
-          await audioContextRef.current.audioWorklet.addModule('/audio-processor.worklet.js');
-          const workletNode = new AudioWorkletNode(audioContextRef.current, 'audio-processor');
-          
-          workletNode.port.onmessage = (event) => {
-            if (event.data.audio && websocketManager.isConnected()) {
-              websocketManager.send(event.data.audio);
-            }
-          };
-          
-          source.connect(workletNode);
-          audioWorkletInitialized = true;
-          console.log('Using AudioWorklet for audio processing');
-        } catch (e) {
-          console.warn('AudioWorklet failed, falling back to ScriptProcessor:', e);
-        }
-      }
+      // Use ScriptProcessor to buffer audio
+      processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+
+      processorRef.current.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Store Float32Array data for later conversion
+        audioBufferRef.current.push(new Float32Array(inputData));
+      };
+
+      source.connect(processorRef.current);
+      processorRef.current.connect(audioContextRef.current.destination);
       
-      // Fallback to ScriptProcessor if AudioWorklet not available or failed
-      if (!audioWorkletInitialized) {
-        processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
-
-        processorRef.current.onaudioprocess = (e) => {
-          if (!websocketManager.isConnected()) return;
-
-          const inputData = e.inputBuffer.getChannelData(0);
-          const pcmData = new Int16Array(inputData.length);
-
-          // Convert Float32 to Int16 (PCM)
-          for (let i = 0; i < inputData.length; i++) {
-            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-          }
-
-          // Send audio data
-          websocketManager.send(pcmData.buffer);
-        };
-
-        source.connect(processorRef.current);
-        processorRef.current.connect(audioContextRef.current.destination);
-        console.log('Using ScriptProcessor for audio processing');
-      }
+      // Set up 15-second timer to send buffered audio
+      bufferTimerRef.current = setInterval(() => {
+        sendBufferedAudio();
+      }, 15000); // 15 seconds
+      
+      console.log('Recording started with 15-second buffering');
       
       // Set up visualization context (separate from recording)
       visualizationContextRef.current = new AudioContextClass();
@@ -231,6 +271,15 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 
   // Stop recording
   const stopRecording = useCallback(() => {
+    // Clear the buffer timer
+    if (bufferTimerRef.current) {
+      clearInterval(bufferTimerRef.current);
+      bufferTimerRef.current = null;
+    }
+    
+    // Send any remaining buffered audio
+    sendBufferedAudio();
+    
     // Send stop command to backend
     if (websocketManager.isConnected()) {
       websocketManager.sendCommand('stop_recording');
@@ -255,6 +304,9 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
       audioContextRef.current = null;
     }
     
+    // Clear audio buffer
+    audioBufferRef.current = [];
+    
     // Stop visualization
     if (visualizationStreamRef.current) {
       visualizationStreamRef.current.getTracks().forEach(track => track.stop());
@@ -271,7 +323,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     
     setWaveformData(new Array(40).fill(0));
     setIsRecording(false);
-  }, [disconnectMutation]);
+  }, [disconnectMutation, sendBufferedAudio]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -287,7 +339,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
   return {
     // State
     isRecording,
-    transcription,
+    transcription: localTranscriptBuffer,  // Use local buffer
     connectionStatus,
     session,
     waveformData,
@@ -295,7 +347,10 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
     // Actions
     startRecording,
     stopRecording,
-    clearTranscription: clearTranscriptionMutation.mutate,
+    clearTranscription: () => {
+      setLocalTranscriptBuffer([]);
+      clearTranscriptionMutation.mutate();
+    },
     connect: connectMutation.mutate,
     disconnect: disconnectMutation.mutate,
     
