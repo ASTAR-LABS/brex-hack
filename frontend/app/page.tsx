@@ -8,6 +8,7 @@ import { WaveformVisualizer } from "@/components/waveform-visualizer";
 import { RecordButton } from "@/components/record-button";
 import { TranscriptionDisplay } from "@/components/transcription-display";
 import { IntegrationsModal } from "@/components/IntegrationsModal";
+import { ActionsPanel } from "@/components/ActionsPanel";
 
 export default function Home() {
   const {
@@ -44,6 +45,9 @@ export default function Home() {
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
       {/* Integrations Modal */}
       <IntegrationsModal />
+      
+      {/* Actions Panel - Shows AI agent activity */}
+      <ActionsPanel />
       
       {/* Connection Status */}
       <ConnectionStatus status={connectionStatus} />

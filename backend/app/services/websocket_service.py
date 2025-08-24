@@ -3,11 +3,9 @@ from fastapi.websockets import WebSocketState
 from app.services.session_service import SessionManager
 from app.services.audio_service import AudioProcessor
 from app.clients.whisper_client import WhisperClient
-from app.services.action_extraction_service import ActionExtractionService
-from app.integrations.github_integration import GitHubIntegration
-from app.core.database import IntegrationCredentials
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import httpx
+import os
+# GitHub integration is now handled through the agent
 import json
 import asyncio
 import logging
@@ -24,7 +22,7 @@ class WebSocketService:
 
         self.session_manager = SessionManager()
         self.whisper_client = WhisperClient(model_size=settings.whisper_model_size)
-        self.action_service = ActionExtractionService()
+        self.agent_base_url = os.getenv("API_URL", "http://localhost:8000")
 
     async def start(self):
         await self.session_manager.start()
@@ -220,23 +218,53 @@ class WebSocketService:
     async def _extract_and_execute_actions(
         self, text: str, session, websocket: WebSocket
     ):
-        """Extract actions from text and execute high-confidence GitHub actions"""
+        """Process text through the agent and handle tool executions"""
         try:
-            # Get executed actions summary for context
-            executed_actions_summary = session.get_executed_actions_summary()
-
-            # Extract actions from the text with context of what's been done
-            result = await self.action_service.extract_actions(
-                text, executed_actions_summary
-            )
-
-            if "error" in result:
-                logger.error(f"Action extraction error: {result['error']}")
+            # Get session token for authentication
+            session_token = session.metadata.get("session_token")
+            
+            # Call the new agent endpoint
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.agent_base_url}/api/v1/agent/chat",
+                    json={
+                        "message": text,
+                        "categories": ["github", "utility"],  # Enable relevant tools
+                        "model": "gpt-oss-120b",
+                        "session_token": session_token
+                    },
+                    timeout=30.0
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"Agent API error: {response.status_code} - {response.text}")
+                    await websocket.send_json({
+                        "type": "action_error",
+                        "message": "Failed to process your request",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    return
+                
+                result = response.json()
+            
+            if not result.get("success"):
+                logger.error(f"Agent processing failed: {result.get('error')}")
                 return
+            
+            # Extract tools used and convert to actions format
+            tools_used = result.get("tools_used", [])
+            actions = []
+            
+            for tool_name in tools_used:
+                # Convert tool usage to action format for frontend compatibility
+                action_type = "github_action" if "github" in tool_name else "task"
+                actions.append({
+                    "type": action_type,
+                    "description": f"Executed {tool_name}",
+                    "confidence": 1.0
+                })
 
-            actions = result.get("actions", [])
-
-            # Notify about extracted actions
+            # Notify about extracted actions (for frontend compatibility)
             if actions:
                 await websocket.send_json(
                     {
@@ -245,272 +273,45 @@ class WebSocketService:
                         "timestamp": datetime.now().isoformat(),
                     }
                 )
-
-            # Process each action
-            for action in actions:
-                # Handle update actions
-                if action["type"] == "update_action" and action["confidence"] > 0.8:
-                    await self._handle_update_action(action, session, websocket)
-                # Handle new GitHub actions
-                elif action["type"] == "github_action" and action["confidence"] > 0.8:
-                    await self._execute_github_action(action, session, websocket)
+            
+            # Send agent response as a message
+            agent_response = result.get("response", "")
+            if agent_response:
+                await websocket.send_json(
+                    {
+                        "type": "agent_response",
+                        "message": agent_response,
+                        "tools_used": tools_used,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+            
+            # If GitHub tools were used, notify as action_executed for frontend
+            for tool in tools_used:
+                if "github" in tool.lower():
+                    # Add to session's executed actions
+                    action_id = str(uuid.uuid4())
+                    session.add_executed_action(
+                        action_id=action_id,
+                        action_type="github_action",
+                        description=f"Executed {tool}",
+                        github_id=None  # Agent handles the actual execution
+                    )
+                    
+                    await websocket.send_json(
+                        {
+                            "type": "action_executed",
+                            "action": tool,
+                            "result": {
+                                "message": f"Successfully executed {tool}"
+                            },
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
 
         except Exception as e:
             logger.error(f"Error extracting/executing actions: {e}")
 
-    async def _execute_github_action(self, action: dict, session, websocket: WebSocket):
-        """Execute a GitHub action using stored credentials"""
-        try:
-            session_token = session.metadata.get("session_token")
+    # GitHub action execution is now handled by the agent
 
-            if not session_token:
-                await websocket.send_json(
-                    {
-                        "type": "action_error",
-                        "message": "No GitHub credentials configured. Please connect GitHub in settings.",
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
-                return
-
-            # Get credentials from database
-            from app.core.database import AsyncSessionLocal
-
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(IntegrationCredentials).where(
-                        IntegrationCredentials.session_token == session_token
-                    )
-                )
-                creds = result.scalar_one_or_none()
-
-                if not creds or not creds.github_token:
-                    await websocket.send_json(
-                        {
-                            "type": "action_error",
-                            "message": "GitHub credentials not found. Please reconnect GitHub.",
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    return
-
-                # Initialize GitHub integration
-                github = GitHubIntegration(
-                    token=creds.github_token,
-                    owner=creds.github_owner,
-                    repo=creds.github_repo,
-                )
-
-                # Parse the action description to determine what to do
-                description = action["description"].lower()
-
-                if "issue" in description:
-                    # Extract title from description
-                    title = action["description"]
-                    if "create" in description:
-                        title = title.replace("create", "").replace("issue", "").strip()
-                        title = title.replace("a ", "").replace("an ", "").strip()
-                        title = title.replace("about", "-").replace("for", "-").strip()
-                        title = title.strip("- ").capitalize()
-
-                    if not title:
-                        title = "New Issue"
-
-                    # Create the issue
-                    result = await github.create_issue(
-                        title=title,
-                        body=f"Created via voice command: {action['description']}\n\n---\n*Generated by Ultrathink*",
-                    )
-
-                    if "error" not in result:
-                        action_id = str(uuid.uuid4())
-                        session.add_executed_action(
-                            action_id=action_id,
-                            action_type="github_issue",
-                            description=f"Issue #{result.get('number')}: {result.get('title')}",
-                            github_id=result.get("number"),
-                        )
-
-                        await websocket.send_json(
-                            {
-                                "type": "action_executed",
-                                "action": "github_issue_created",
-                                "result": {
-                                    "issue_number": result.get("number"),
-                                    "issue_url": result.get("html_url"),
-                                    "title": result.get("title"),
-                                },
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                        logger.info(
-                            f"Created GitHub issue #{result.get('number')}: {result.get('title')}"
-                        )
-                    else:
-                        await websocket.send_json(
-                            {
-                                "type": "action_error",
-                                "message": f"Failed to create issue: {result['error']}",
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-
-                elif "pr" in description or "pull request" in description:
-                    # Handle PR comments
-                    pr_number = 1  # Default PR number, could extract from description
-
-                    result = await github.create_pr_comment(
-                        pr_number=pr_number, body=action["description"]
-                    )
-
-                    if "error" not in result:
-                        await websocket.send_json(
-                            {
-                                "type": "action_executed",
-                                "action": "github_pr_comment_created",
-                                "result": {
-                                    "pr_number": pr_number,
-                                    "comment_url": result.get("html_url"),
-                                },
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-                    else:
-                        await websocket.send_json(
-                            {
-                                "type": "action_error",
-                                "message": f"Failed to create PR comment: {result['error']}",
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
-
-        except Exception as e:
-            logger.error(f"Error executing GitHub action: {e}")
-            await websocket.send_json(
-                {
-                    "type": "action_error",
-                    "message": f"Failed to execute action: {str(e)}",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
-
-    async def _handle_update_action(self, action: dict, session, websocket: WebSocket):
-        """Handle update actions for previously executed actions"""
-        try:
-            target_id = action.get("target_id")
-            updates = action.get("updates", {})
-
-            # Determine which action to update
-            if target_id == "last" and session.last_action_id:
-                target_action = session.executed_actions.get(session.last_action_id)
-            else:
-                # Could implement searching by ID or description
-                target_action = None
-                for action_id, act in session.executed_actions.items():
-                    if action_id == target_id or target_id in act["description"]:
-                        target_action = act
-                        break
-
-            if not target_action:
-                await websocket.send_json(
-                    {
-                        "type": "action_error",
-                        "message": "No previous action found to update",
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
-                return
-
-            # If it's a GitHub issue, update it
-            if target_action["type"] == "github_issue" and target_action.get(
-                "github_id"
-            ):
-                session_token = session.metadata.get("session_token")
-
-                if not session_token:
-                    await websocket.send_json(
-                        {
-                            "type": "action_error",
-                            "message": "No GitHub credentials configured",
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    return
-
-                # Get credentials and update the issue
-                from app.core.database import AsyncSessionLocal
-
-                async with AsyncSessionLocal() as db:
-                    result = await db.execute(
-                        select(IntegrationCredentials).where(
-                            IntegrationCredentials.session_token == session_token
-                        )
-                    )
-                    creds = result.scalar_one_or_none()
-
-                    if creds and creds.github_token:
-                        github = GitHubIntegration(
-                            token=creds.github_token,
-                            owner=creds.github_owner,
-                            repo=creds.github_repo,
-                        )
-
-                        # Handle label updates specially
-                        if "labels" in updates:
-                            label_result = await github.add_issue_labels(
-                                target_action["github_id"], updates["labels"]
-                            )
-                            if "error" not in label_result:
-                                await websocket.send_json(
-                                    {
-                                        "type": "action_updated",
-                                        "action": "github_issue_updated",
-                                        "result": {
-                                            "issue_number": target_action["github_id"],
-                                            "updates": updates,
-                                        },
-                                        "timestamp": datetime.now().isoformat(),
-                                    }
-                                )
-                                logger.info(
-                                    f"Updated GitHub issue #{target_action['github_id']}"
-                                )
-                        else:
-                            # Update other fields
-                            update_result = await github.update_issue(
-                                target_action["github_id"], updates
-                            )
-                            if "error" not in update_result:
-                                await websocket.send_json(
-                                    {
-                                        "type": "action_updated",
-                                        "action": "github_issue_updated",
-                                        "result": {
-                                            "issue_number": target_action["github_id"],
-                                            "issue_url": update_result.get("html_url"),
-                                            "updates": updates,
-                                        },
-                                        "timestamp": datetime.now().isoformat(),
-                                    }
-                                )
-                                logger.info(
-                                    f"Updated GitHub issue #{target_action['github_id']}"
-                                )
-                            else:
-                                await websocket.send_json(
-                                    {
-                                        "type": "action_error",
-                                        "message": f"Failed to update issue: {update_result['error']}",
-                                        "timestamp": datetime.now().isoformat(),
-                                    }
-                                )
-
-        except Exception as e:
-            logger.error(f"Error handling update action: {e}")
-            await websocket.send_json(
-                {
-                    "type": "action_error",
-                    "message": f"Failed to update action: {str(e)}",
-                    "timestamp": datetime.now().isoformat(),
-                }
-            )
+    # Update actions are now handled by the agent

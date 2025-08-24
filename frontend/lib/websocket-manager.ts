@@ -170,26 +170,25 @@ class WebSocketManager {
           console.log('Actions extracted:', data.actions);
         }
         
-        // Handle action execution
+        // Handle agent response
+        if (data.type === 'agent_response') {
+          console.log('Agent response:', data.message);
+          console.log('Tools used:', data.tools_used);
+          // No alert needed - ActionsPanel will show this
+        }
+        
+        // Handle action execution (for backward compatibility)
         if (data.type === 'action_executed') {
-          if (data.action === 'github_issue_created') {
-            const { issue_number, issue_url, title } = data.result;
-            console.log(`✅ Created GitHub Issue #${issue_number}: ${title}`);
-            console.log(`View at: ${issue_url}`);
-            
-            // Show a notification (could be improved with a toast library)
-            alert(`✅ Created GitHub Issue #${issue_number}\n\n"${title}"\n\nView at: ${issue_url}`);
-          } else if (data.action === 'github_pr_comment_created') {
-            const { pr_number, comment_url } = data.result;
-            console.log(`✅ Added comment to PR #${pr_number}`);
-            alert(`✅ Added comment to PR #${pr_number}\n\nView at: ${comment_url}`);
-          }
+          const action = data.action;
+          const result = data.result;
+          console.log(`✅ Action executed: ${action}`);
+          // No alert needed - ActionsPanel will show this
         }
         
         // Handle action errors
         if (data.type === 'action_error') {
           console.error('Action error:', data.message);
-          alert(`⚠️ Action Error: ${data.message}`);
+          // No alert needed - ActionsPanel will show this
         }
 
         // Notify all listeners

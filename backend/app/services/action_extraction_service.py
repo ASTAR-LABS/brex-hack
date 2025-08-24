@@ -27,7 +27,6 @@ class ActionsList(BaseModel):
 class ActionExtractionService:
     def __init__(self):
         self.use_agent = os.getenv("USE_AGENTIC_MODE", "false").lower() == "true"
-        self.orchestrator = None
         
         if not self.use_agent:
             # Traditional extraction mode
@@ -91,39 +90,53 @@ IMPORTANT:
             ]
         )
     
-    async def initialize_agent(self, session_token: Optional[str] = None, integration_config: Optional[Dict] = None):
-        """Initialize the agentic orchestrator if in agent mode"""
-        if self.use_agent and not self.orchestrator:
-            from app.services.agentic_orchestrator import AgenticOrchestrator
-            self.orchestrator = AgenticOrchestrator()
-            await self.orchestrator.initialize(session_token, integration_config)
-            logger.info("Initialized agentic orchestrator")
+    # Agent initialization is no longer needed - we use the new agent API directly
     
     async def extract_actions(self, text: str, session_token: Optional[str] = None, integration_config: Optional[Dict] = None, executed_actions: Optional[List[str]] = None) -> Dict[str, Any]:
         try:
-            # Use agentic mode if enabled
+            # Use new agent endpoint if enabled
             if self.use_agent:
-                if not self.orchestrator:
-                    await self.initialize_agent(session_token, integration_config)
+                import httpx
+                agent_base_url = os.getenv("API_URL", "http://localhost:8000")
                 
-                if self.orchestrator:
-                    # Use the agent to process the request
-                    result = await self.orchestrator.process_request(
-                        text=text,
-                        session_token=session_token or "anonymous"
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{agent_base_url}/api/v1/agent/chat",
+                        json={
+                            "message": text,
+                            "categories": ["github", "utility"],
+                            "model": "gpt-oss-120b",
+                            "session_token": session_token
+                        },
+                        timeout=30.0
                     )
                     
-                    # Convert agent result to expected format
-                    if "error" not in result or not result["error"]:
-                        return {
-                            "actions": result.get("actions", []),
-                            "agent_response": result.get("result", ""),
-                            "error": None
-                        }
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get("success"):
+                            # Convert tools_used to actions format
+                            actions = []
+                            for tool in result.get("tools_used", []):
+                                actions.append({
+                                    "type": "github_action" if "github" in tool else "task",
+                                    "description": f"Executed {tool}",
+                                    "confidence": 1.0
+                                })
+                            
+                            return {
+                                "actions": actions,
+                                "agent_response": result.get("response", ""),
+                                "error": None
+                            }
+                        else:
+                            return {
+                                "actions": [],
+                                "error": result.get("error", "Agent processing failed")
+                            }
                     else:
                         return {
                             "actions": [],
-                            "error": result.get("error")
+                            "error": f"Agent API error: {response.status_code}"
                         }
             
             # Fallback to traditional extraction
