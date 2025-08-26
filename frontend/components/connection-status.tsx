@@ -9,12 +9,32 @@ interface ConnectionStatusProps {
 }
 
 export function ConnectionStatus({ status }: ConnectionStatusProps) {
-  const getStatusColor = () => {
+  const getStatusStyle = () => {
     switch (status) {
-      case 'connected': return 'text-green-500';
-      case 'connecting': return 'text-yellow-500';
-      case 'error': return 'text-red-500';
-      default: return 'text-gray-500';
+      case 'connected': 
+        return {
+          color: 'text-emerald-400',
+          bg: 'bg-emerald-500/10 border-emerald-500/30',
+          dot: 'bg-emerald-500'
+        };
+      case 'connecting': 
+        return {
+          color: 'text-amber-400',
+          bg: 'bg-amber-500/10 border-amber-500/30',
+          dot: 'bg-amber-500'
+        };
+      case 'error': 
+        return {
+          color: 'text-red-400',
+          bg: 'bg-red-500/10 border-red-500/30',
+          dot: 'bg-red-500'
+        };
+      default: 
+        return {
+          color: 'text-slate-400',
+          bg: 'bg-slate-500/10 border-slate-500/30',
+          dot: 'bg-slate-500'
+        };
     }
   };
 
@@ -24,14 +44,15 @@ export function ConnectionStatus({ status }: ConnectionStatusProps) {
       <WifiOff className="w-4 h-4" />;
   };
 
+  const statusStyle = getStatusStyle();
+
   return (
-    <div className="absolute top-4 right-4 flex items-center gap-2">
-      <div className={`flex items-center gap-2 ${getStatusColor()}`}>
-        {getIcon()}
-        <span className="text-xs uppercase tracking-wider">
-          {status}
-        </span>
-      </div>
+    <div className={`flex items-center gap-3 px-3 py-2 rounded-full backdrop-blur-sm border ${statusStyle.bg} ${statusStyle.color}`}>
+      <div className={`w-2 h-2 rounded-full ${statusStyle.dot} ${status === 'connecting' ? 'animate-pulse' : ''}`} />
+      {getIcon()}
+      <span className="text-xs font-medium uppercase tracking-wider">
+        {status}
+      </span>
     </div>
   );
 }
