@@ -42,62 +42,58 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-8">
-      {/* Integrations Modal */}
-      <IntegrationsModal />
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-gray-900 to-slate-950 text-white relative overflow-hidden">
+      {/* Background gradient overlay */}
+      <div className="absolute inset-0 bg-gradient-to-r from-purple-900/10 via-transparent to-blue-900/10"></div>
       
-      {/* Actions Panel - Shows AI agent activity */}
-      <ActionsPanel />
-      
-      {/* Connection Status */}
-      <ConnectionStatus status={connectionStatus} />
-
-      {/* Session Info */}
-      <SessionInfo sessionId={session?.id} />
-
-      {/* Title */}
-      <RecordingTitle 
-        isRecording={isRecording}
-        hasTranscription={transcription.length > 0}
-        connectionError={connectionStatus === 'error'}
-      />
-
-      {/* Transcription Display - Now on top */}
-      <TranscriptionDisplay
-        transcription={transcription}
-        isRecording={isRecording}
-        onClear={clearTranscription}
-      />
-
-      {/* Record Button - In the middle */}
-      <RecordButton
-        isRecording={isRecording}
-        isConnecting={isConnecting}
-        onClick={toggleRecording}
-      />
-
-      {/* Waveform Visualization - Now on bottom */}
-      <WaveformVisualizer 
-        data={waveformData}
-        isActive={isRecording}
-      />
-
-      <style jsx>{`
-        @keyframes fade-in {
-          from {
-            opacity: 0;
-            transform: translateY(10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
+      {/* Main content container */}
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8">
+        {/* Integrations Modal */}
+        <IntegrationsModal />
         
-        .animate-fade-in {
-          animation: fade-in 0.3s ease-out;
-        }
-      `}</style>
+        {/* Actions Panel - Shows AI agent activity */}
+        <ActionsPanel />
+        
+        {/* Status bar - top of screen */}
+        <div className="fixed top-0 left-0 right-0 z-50 p-4">
+          <div className="flex justify-between items-center max-w-6xl mx-auto">
+            <ConnectionStatus status={connectionStatus} />
+            <SessionInfo sessionId={session?.id} />
+          </div>
+        </div>
+
+        {/* Main content area */}
+        <div className="flex flex-col items-center justify-center space-y-8 max-w-6xl mx-auto pt-16">
+          {/* Title */}
+          <RecordingTitle 
+            isRecording={isRecording}
+            hasTranscription={transcription.length > 0}
+            connectionError={connectionStatus === 'error'}
+          />
+
+          {/* Transcription Display */}
+          <TranscriptionDisplay
+            transcription={transcription}
+            isRecording={isRecording}
+            onClear={clearTranscription}
+          />
+
+          {/* Record Button */}
+          <div className="flex flex-col items-center space-y-6">
+            <RecordButton
+              isRecording={isRecording}
+              isConnecting={isConnecting}
+              onClick={toggleRecording}
+            />
+            
+            {/* Waveform Visualization */}
+            <WaveformVisualizer 
+              data={waveformData}
+              isActive={isRecording}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
