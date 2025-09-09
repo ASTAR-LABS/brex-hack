@@ -1,5 +1,6 @@
 'use client';
 
+import { Mic, Square } from 'lucide-react';
 import { useSimpleRecording } from '@/hooks/use-simple-recording';
 
 export default function SimplePage() {
@@ -15,13 +16,17 @@ export default function SimplePage() {
       <button
         onClick={toggleRecording}
         disabled={isProcessing}
-        className={`w-32 h-32 rounded-full flex items-center justify-center text-6xl transition-all ${
+        className={`w-32 h-32 rounded-full flex items-center justify-center transition-all ${
           isRecording 
             ? 'bg-red-600 hover:bg-red-700 animate-pulse' 
             : 'bg-blue-600 hover:bg-blue-700'
         } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
-        {isRecording ? '⏹' : '🎤'}
+        {isRecording ? (
+          <Square className="w-12 h-12 text-white" />
+        ) : (
+          <Mic className="w-12 h-12 text-white" />
+        )}
       </button>
       
       
